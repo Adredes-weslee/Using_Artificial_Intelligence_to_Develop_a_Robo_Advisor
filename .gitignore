@@ -1,4 +1,32 @@
-venv
+#Ignore Python cache files
+pycache/
 *.pyc
+*.pyo
+*.pyd
+
+#Ignore virtual environment folders
+venv/
+env/
+.venv/
+
+#Ignore IDE and editor folders
+.vscode/
+.idea/
+
+#Ignore data files - these should not be committed to Git
+Add specific data files if they are large
+# /data/raw/
+# /data/processed/
+# /data/output/
+
+#Ignore OS-specific files
 .DS_Store
+Thumbs.db
+
+#Ignore notebook checkpoints
+.ipynb_checkpoints/
+
+/to_remove
+
+# Environment variables (contains API keys)
 .env
