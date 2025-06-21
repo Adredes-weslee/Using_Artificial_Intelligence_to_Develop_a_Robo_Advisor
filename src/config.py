@@ -24,11 +24,10 @@ PROCESSED_SP500_FILE = "sp500_processed.csv"
 
 # --- Model Artifacts ---
 RISK_MODEL_FILE = "risk_tolerance_model.pkl"
-RL_AGENT_MODEL_FILE = "rl_agent_model.h5"
+RL_AGENT_MODEL_FILE = "rl_agent_model.pth"  # Changed to PyTorch format
 
 # --- Data Processing Parameters ---
 # Features selected from the Survey of Consumer Finances (SCF) dataset
-# Based on the actual notebook implementation
 SELECTED_SCF_FEATURES = [
     'LIQ', 'MMA', 'CHECKING', 'SAVING', 'CALL', 'CDS', 'PREPAID', 'SAVBND', 'CASHLI',
     'NMMF', 'STOCKS', 'BOND', 'OTHMA', 'OTHFIN', 'RETQLIQ',
@@ -36,13 +35,13 @@ SELECTED_SCF_FEATURES = [
     'INCCAT', 'NWCAT', 'WSAVED', 'SPENDMOR', 'KNOWL'
 ]
 
-# Risk-free asset columns (from notebook analysis)
+# Risk-free asset columns
 RISK_FREE_ASSETS = ['LIQ', 'MMA', 'CHECKING', 'SAVING', 'CALL', 'CDS', 'PREPAID', 'SAVBND', 'CASHLI']
 
-# Risky asset columns (from notebook analysis)
+# Risky asset columns
 RISKY_ASSETS = ['NMMF', 'STOCKS', 'BOND', 'OTHMA', 'OTHFIN', 'RETQLIQ']
 
-# Final features for model training (after risk tolerance calculation)
+# Final features for model training
 FINAL_FEATURES = ['AGECL', 'HHSEX', 'EDCL', 'KIDS', 'MARRIED', 'HOUSECL', 'OCCAT2', 'LIFECL', 
                   'INCCAT', 'NWCAT', 'WSAVED', 'SPENDMOR', 'KNOWL']
 
@@ -50,7 +49,6 @@ TARGET_COLUMN = 'Risk_tolerance'
 
 # --- Portfolio Configuration ---
 # Core assets for portfolio optimization and RL training
-# Selected based on liquidity, market cap, and sector diversity
 DEFAULT_PORTFOLIO_ASSETS = [
     # Technology
     'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'META', 'NVDA', 'ADBE', 'CRM', 'INTC',
@@ -64,7 +62,7 @@ DEFAULT_PORTFOLIO_ASSETS = [
     'VZ', 'AVGO'
 ]
 
-# Legacy compatibility (keeping original notebook examples)
+# Legacy compatibility
 DEFAULT_SP500_TICKERS = ['GOOGL', 'META', 'GS', 'MS', 'GE', 'MSFT']
 
 # Asset universe by sector for portfolio construction
@@ -88,38 +86,34 @@ RISK_TOLERANCE_LEVELS = [0.2, 0.4, 0.5, 0.6, 0.8]
 # Multiple RL models for different risk profiles
 RL_MODEL_CONFIGS = {
     'Conservative': {
-        'model_file': 'rl_agent_conservative.h5',
+        'model_file': 'rl_agent_conservative.pth',
         'reward_function': lambda reward, volatility: reward - 2 * volatility,
         'description': "Aims for stable returns with low volatility",
-        'target_assets': 15,  # Fewer assets for stability
-        'rebalance_frequency': 30  # More frequent rebalancing
+        'target_assets': 15,
+        'rebalance_frequency': 30
     },
     'Balanced': {
-        'model_file': 'rl_agent_balanced.h5',
-        'reward_function': lambda reward, volatility: reward / (volatility + 1e-6),  # Sharpe Ratio
+        'model_file': 'rl_agent_balanced.pth',
+        'reward_function': lambda reward, volatility: reward / (volatility + 1e-6),
         'description': "Balances return maximization with risk control",
-        'target_assets': 20,  # Moderate diversification
-        'rebalance_frequency': 45  # Standard rebalancing
+        'target_assets': 20,
+        'rebalance_frequency': 45
     },
     'Aggressive': {
-        'model_file': 'rl_agent_aggressive.h5',
+        'model_file': 'rl_agent_aggressive.pth',
         'reward_function': lambda reward, volatility: reward,
         'description': "Focuses on maximizing returns, accepting higher volatility",
-        'target_assets': 30,  # More assets for growth opportunities
-        'rebalance_frequency': 60  # Less frequent rebalancing
+        'target_assets': 30,
+        'rebalance_frequency': 60
     }
 }
 
-# --- RL Agent & Environment Parameters ---
-LOOKBACK_WINDOW_SIZE = 50
-INITIAL_BALANCE = 10000
-
-# Transfer learning configuration for handling different asset sets
+# Transfer learning configuration
 TRANSFER_LEARNING_CONFIG = {
-    'min_overlap_ratio': 0.6,  # Minimum 60% asset overlap to use existing model
-    'retrain_threshold': 0.4,   # If overlap < 40%, retrain from scratch
-    'fine_tune_epochs': 10,     # Episodes for fine-tuning with new assets
-    'base_model_weight': 0.7    # Weight for base model when fine-tuning
+    'min_overlap_ratio': 0.6,
+    'retrain_threshold': 0.4,
+    'fine_tune_epochs': 10,
+    'base_model_weight': 0.7
 }
 
 # --- Model Training Parameters ---
@@ -133,18 +127,29 @@ CRITERION_ETR = 'squared_error'
 SP500_START_DATE = '2000-01-01'
 SP500_END_DATE = '2023-09-10'
 SP500_WIKI_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-
-# Missing value threshold for dropping columns
 MISSING_VALUE_THRESHOLD = 0.3
 
-# --- Legacy Risk Profiles (for backward compatibility) ---
+# --- RL Agent & Environment Parameters ---
+LOOKBACK_WINDOW_SIZE = 50
+INITIAL_BALANCE = 10000
+
+# --- Cloud Optimization Configuration (Streamlit Only) ---
+CLOUD_OPTIMIZATION_CONFIG = {
+    'max_assets_for_rl': 10,
+    'fallback_to_mpt': True,
+    'memory_limit_mb': 512,
+    'enable_transfer_learning': False,
+    'max_episodes_cloud': 10
+}
+
+# Legacy Risk Profiles (for backward compatibility)
 RISK_PROFILES = {
     'Conservative': {
         'reward_function': lambda reward, volatility: reward - 2 * volatility,
         'description': "Aims for stable returns with low volatility."
     },
     'Balanced': {
-        'reward_function': lambda reward, volatility: reward / (volatility + 1e-6),  # Sharpe Ratio
+        'reward_function': lambda reward, volatility: reward / (volatility + 1e-6),
         'description': "Balances return maximization with risk control."
     },
     'Aggressive': {
@@ -152,5 +157,3 @@ RISK_PROFILES = {
         'description': "Focuses on maximizing returns, accepting higher volatility."
     }
 }
-
-
