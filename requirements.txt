@@ -1,0 +1,11 @@
+streamlit
+pandas
+numpy
+plotly
+transformers
+torch
+vaderSentiment
+emoji
+python-dotenv
+wordcloud
+tqdm
