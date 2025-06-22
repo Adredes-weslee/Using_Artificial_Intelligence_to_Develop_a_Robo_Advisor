@@ -108,7 +108,9 @@ def main():
             agent, is_new = manager.get_or_create_agent(
                 risk_profile=risk_profile,
                 selected_assets=available_assets,
-                market_data=selected_data
+                market_data=selected_data,
+                return_weight=0.5,  # ← ADD THIS LINE
+                risk_weight=0.5     # ← ADD THIS LINE
             )
             
             # FIX 1: EVALUATE THE AGENT WITH CORRECT MODEL NAME AND PATH
@@ -116,7 +118,8 @@ def main():
 
             # Use the actual saved model filename format with FULL PATH
             asset_string = "_".join(sorted(available_assets))
-            model_name = f"{risk_profile}_{asset_string}"  # Just the filename
+            objective_suffix = "ret0.5_risk0.5"  # ← ADD THIS LINE
+            model_name = f"{risk_profile}_{asset_string}_{objective_suffix}"  # ← ADD objective_suffix
             model_path = config.OUTPUT_DIR / f"{model_name}.pth"  # Full path with .pth extension
 
             print(f"Looking for model at: {model_path}")
