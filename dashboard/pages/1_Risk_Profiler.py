@@ -240,6 +240,10 @@ if model:
     
     st.markdown("---")
     
+    # Initialize session state for risk assessment results
+    if 'risk_assessment_results' not in st.session_state:
+        st.session_state.risk_assessment_results = None
+    
     # Calculate Risk Profile Button
     if st.button("🧮 Calculate My Risk Tolerance", type="primary"):
         try:
@@ -310,141 +314,50 @@ if model:
                 )
                 risk_score = max(1.0, min(4.0, risk_score))
             
-            # Display Results
-            st.markdown("---")
-            st.header("🎯 Your Risk Tolerance Results")
-            
-            # Risk Score Display
-            col1, col2, col3 = st.columns([1, 2, 1])
-            
-            with col2:
-                # Risk score gauge
-                score_percentage = (risk_score - 1) / 3 * 100
-                
-                if risk_score <= 1.5:
-                    risk_category = "Very Conservative"
-                    risk_color = "🟢"
-                    recommendation = "Conservative"
-                elif risk_score <= 2.5:
-                    risk_category = "Conservative"
-                    risk_color = "🟡"
-                    recommendation = "Conservative"
-                elif risk_score <= 3.5:
-                    risk_category = "Moderate"
-                    risk_color = "🟠"
-                    recommendation = "Balanced"
-                else:
-                    risk_category = "Aggressive"
-                    risk_color = "🔴"
-                    recommendation = "Aggressive"
-                
-                st.metric(
-                    "Risk Tolerance Score",
-                    f"{risk_score:.2f} / 4.0",
-                    f"{risk_category}"
-                )
-                
-                # Progress bar for visual representation
-                st.progress(score_percentage / 100)
-                
-                st.markdown(f"### {risk_color} **{risk_category}** Investor")
-            
-            # AI Model Used Display
-            st.info(f"🤖 **Assessment powered by**: {model_type}")
-            
-            # Detailed Analysis
-            st.subheader("📊 Detailed Analysis")
-            
-            analysis_col1, analysis_col2 = st.columns(2)
-            
-            with analysis_col1:
-                st.markdown("**Your Profile:**")
-                st.write(f"• Age: {age} years")
-                st.write(f"• Investment Experience: {investment_experience}")
-                st.write(f"• Time Horizon: {investment_horizon}")
-                st.write(f"• Risk Comfort Level: {risk_comfort}/10")
-                st.write(f"• Loss Tolerance: {loss_tolerance}%")
-            
-            with analysis_col2:
-                st.markdown("**Recommendations:**")
-                st.write(f"• **Portfolio Type**: {recommendation}")
-                st.write(f"• **Risk Level**: {risk_category}")
-                st.write(f"• **Expected Return**: {return_expectation}%")
-                st.write(f"• **Investment Goal**: {primary_goal}")
-            
-            # Portfolio Recommendation
-            st.subheader("💼 Recommended Portfolio Strategy")
-            
-            if recommendation == "Conservative":
-                st.info("""
-                **Conservative Portfolio Strategy:**
-                - Focus on capital preservation and steady income
-                - Higher allocation to bonds and defensive stocks
-                - Lower volatility, steady returns
-                - Suitable for risk-averse investors
-                """)
-            elif recommendation == "Balanced":
-                st.info("""
-                **Balanced Portfolio Strategy:**
-                - Mix of growth and income investments
-                - Diversified across asset classes
-                - Moderate risk for moderate returns
-                - Good for most investors
-                """)
+            # Determine risk category and recommendation
+            if risk_score <= 1.5:
+                risk_category = "Very Conservative"
+                risk_color = "🟢"
+                recommendation = "Conservative"
+            elif risk_score <= 2.5:
+                risk_category = "Conservative"
+                risk_color = "🟡"
+                recommendation = "Conservative"
+            elif risk_score <= 3.5:
+                risk_category = "Moderate"
+                risk_color = "🟠"
+                recommendation = "Balanced"
             else:
-                st.info("""
-                **Aggressive Portfolio Strategy:**
-                - Growth-focused investments
-                - Higher allocation to stocks and growth assets
-                - Higher volatility, higher potential returns
-                - Suitable for risk-tolerant investors
-                """)
+                risk_category = "Aggressive"
+                risk_color = "🔴"
+                recommendation = "Aggressive"
             
-            # AI Technology Showcase
-            if 'TabPFN' in model_type:
-                st.success("""
-                🚀 **Powered by TabPFN Foundation Model**
-                
-                Your risk assessment leveraged cutting-edge AI technology:
-                - Foundation model trained on vast financial datasets
-                - No hyperparameter tuning required
-                - State-of-the-art performance on tabular data
-                - Represents the latest in 2024 AI technology
-                """)
-            elif 'ExtraTree' in model_type:
-                st.info("""
-                🌲 **Powered by Extra Trees Ensemble**
-                
-                Your risk assessment used proven machine learning:
-                - Ensemble of decision trees for robust predictions
-                - Handles complex feature interactions
-                - Reliable and interpretable results
-                - Time-tested ensemble method
-                """)
+            # Store results in session state
+            st.session_state.risk_assessment_results = {
+                'risk_score': risk_score,
+                'risk_category': risk_category,
+                'risk_color': risk_color,
+                'recommendation': recommendation,
+                'model_type': model_type,
+                'user_profile': {
+                    'age': age,
+                    'investment_experience': investment_experience,
+                    'investment_horizon': investment_horizon,
+                    'risk_comfort': risk_comfort,
+                    'loss_tolerance': loss_tolerance,
+                    'return_expectation': return_expectation,
+                    'primary_goal': primary_goal
+                },
+                'timestamp': pd.Timestamp.now()
+            }
             
-            # Next Steps
-            st.subheader("➡️ Next Steps")
-            st.markdown(f"""
-            1. **Use the Portfolio Optimizer** with your **{recommendation}** risk profile
-            2. **Select assets** that match your risk tolerance
-            3. **Review and adjust** your portfolio regularly
-            4. **Monitor performance** against your goals
-            """)
-            
-            # Save to session state for use in other pages
+            # Also save individual values for backward compatibility
             st.session_state.risk_score = risk_score
             st.session_state.risk_category = risk_category
             st.session_state.recommended_profile = recommendation
             st.session_state.model_used = model_type
+            st.session_state.risk_assessment_complete = True
             
-            # Success message with call-to-action
-            success_col1, success_col2, success_col3 = st.columns([1, 2, 1])
-            with success_col2:
-                st.success("✅ Risk assessment complete!")
-                
-                if st.button("🚀 Proceed to Portfolio Optimizer", type="primary"):
-                    st.switch_page("pages/2_Portfolio_Optimizer.py")
-                
         except Exception as e:
             st.error(f"❌ Error calculating risk tolerance: {e}")
             st.error("Please check your inputs and try again.")
@@ -452,6 +365,132 @@ if model:
             # Show detailed error for debugging
             with st.expander("🐛 Error Details"):
                 st.code(str(e))
+    
+    # Display Results (persistent across page interactions)
+    if st.session_state.risk_assessment_results is not None:
+        results = st.session_state.risk_assessment_results
+        risk_score = results['risk_score']
+        risk_category = results['risk_category']
+        risk_color = results['risk_color']
+        recommendation = results['recommendation']
+        model_type = results['model_type']
+        user_profile = results['user_profile']
+        
+        st.markdown("---")
+        st.header("🎯 Your Risk Tolerance Results")
+        
+        # Add a "Clear Results" button
+        clear_col1, clear_col2, clear_col3 = st.columns([1, 1, 1])
+        with clear_col2:
+            if st.button("🗑️ Clear Assessment", help="Clear results and start over"):
+                st.session_state.risk_assessment_results = None
+                st.rerun()
+        
+        # Risk Score Display
+        col1, col2, col3 = st.columns([1, 2, 1])
+        
+        with col2:
+            # Risk score gauge
+            score_percentage = (risk_score - 1) / 3 * 100
+            
+            st.metric(
+                "Risk Tolerance Score",
+                f"{risk_score:.2f} / 4.0",
+                f"{risk_category}"
+            )
+            
+            # Progress bar for visual representation
+            st.progress(score_percentage / 100)
+            
+            st.markdown(f"### {risk_color} **{risk_category}** Investor")
+        
+        # AI Model Used Display
+        st.info(f"🤖 **Assessment powered by**: {model_type}")
+        
+        # Detailed Analysis
+        st.subheader("📊 Detailed Analysis")
+        
+        analysis_col1, analysis_col2 = st.columns(2)
+        
+        with analysis_col1:
+            st.markdown("**Your Profile:**")
+            st.write(f"• Age: {user_profile['age']} years")
+            st.write(f"• Investment Experience: {user_profile['investment_experience']}")
+            st.write(f"• Time Horizon: {user_profile['investment_horizon']}")
+            st.write(f"• Risk Comfort Level: {user_profile['risk_comfort']}/10")
+            st.write(f"• Loss Tolerance: {user_profile['loss_tolerance']}%")
+        
+        with analysis_col2:
+            st.markdown("**Recommendations:**")
+            st.write(f"• **Portfolio Type**: {recommendation}")
+            st.write(f"• **Risk Level**: {risk_category}")
+            st.write(f"• **Expected Return**: {user_profile['return_expectation']}%")
+            st.write(f"• **Investment Goal**: {user_profile['primary_goal']}")
+        
+        # Portfolio Recommendation
+        st.subheader("💼 Recommended Portfolio Strategy")
+        
+        if recommendation == "Conservative":
+            st.info("""
+            **Conservative Portfolio Strategy:**
+            - Focus on capital preservation and steady income
+            - Higher allocation to bonds and defensive stocks
+            - Lower volatility, steady returns
+            - Suitable for risk-averse investors
+            """)
+        elif recommendation == "Balanced":
+            st.info("""
+            **Balanced Portfolio Strategy:**
+            - Mix of growth and income investments
+            - Diversified across asset classes
+            - Moderate risk for moderate returns
+            - Good for most investors
+            """)
+        else:
+            st.info("""
+            **Aggressive Portfolio Strategy:**
+            - Growth-focused investments
+            - Higher allocation to stocks and growth assets
+            - Higher volatility, higher potential returns
+            - Suitable for risk-tolerant investors
+            """)
+        
+        # AI Technology Showcase
+        if 'TabPFN' in model_type:
+            st.success("""
+            🚀 **Powered by TabPFN Foundation Model**
+            
+            Your risk assessment leveraged cutting-edge AI technology:
+            - Foundation model trained on vast financial datasets
+            - No hyperparameter tuning required
+            - State-of-the-art performance on tabular data
+            - Represents the latest in 2024 AI technology
+            """)
+        elif 'ExtraTree' in model_type:
+            st.info("""
+            🌲 **Powered by Extra Trees Ensemble**
+            
+            Your risk assessment used proven machine learning:
+            - Ensemble of decision trees for robust predictions
+            - Handles complex feature interactions
+            - Reliable and interpretable results
+            - Time-tested ensemble method
+            """)
+        
+        # Next Steps
+        st.subheader("➡️ Next Steps")
+        st.markdown(f"""
+        ### 🚀 **Ready for Portfolio Optimization?**
+        
+        Your **{recommendation}** risk profile has been saved!
+        
+        👉 **Use the sidebar** to navigate to **"📈 Portfolio Optimizer"**
+        
+        Your risk assessment will be automatically applied to create a personalized portfolio.
+        """)
+        
+        # Visual confirmation of saved profile
+        st.success(f"💾 **Risk Profile Saved**: {recommendation} | Score: {risk_score:.2f} | Assessed: {results['timestamp'].strftime('%Y-%m-%d %H:%M')}")
 
 else:
     st.error("❌ Cannot load risk tolerance model. Please ensure the model training is complete.")
