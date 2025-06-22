@@ -131,6 +131,23 @@ def load_risk_model():
 # Load the model
 model, model_type = load_risk_model()
 
+# Add this debugging section right after load_risk_model() call
+st.write("🔍 **Debug Information:**")
+st.write(f"**Project Root**: {project_root}")
+st.write(f"**Config OUTPUT_DIR**: {config.OUTPUT_DIR}")
+st.write(f"**Config RISK_MODEL_FILE**: {config.RISK_MODEL_FILE}")
+st.write(f"**Full Model Path**: {config.OUTPUT_DIR / config.RISK_MODEL_FILE}")
+st.write(f"**Model Path Exists**: {(config.OUTPUT_DIR / config.RISK_MODEL_FILE).exists()}")
+
+# List files in output directory
+output_dir = config.OUTPUT_DIR
+if output_dir.exists():
+    st.write(f"**Files in {output_dir}:**")
+    for file in output_dir.iterdir():
+        st.write(f"  - {file.name}")
+else:
+    st.write(f"**Output directory {output_dir} does not exist**")
+
 # Display environment info
 if is_cloud:
     st.info("🌩️ **Cloud Mode**: Optimized risk assessment for cloud deployment")
