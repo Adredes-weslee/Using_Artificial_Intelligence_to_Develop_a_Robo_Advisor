@@ -1,131 +1,167 @@
 """Contains functions for training and evaluating the risk tolerance prediction model.
 
-This module implements the complete machine learning pipeline for risk tolerance prediction,
-including model comparison, hyperparameter tuning, and evaluation, based on the original notebook.
+This module implements TabPFN foundation model for risk tolerance prediction,
+providing state-of-the-art performance on tabular data with GPU acceleration.
 """
 import pandas as pd
 import numpy as np
 import joblib
-import bz2
-import _pickle as cPickle
 from pathlib import Path
-from typing import Tuple, Dict, Any, Optional
+from typing import Tuple, Dict, Any, Optional, List
 import matplotlib.pyplot as plt
-import seaborn as sns
+import torch
 
-from sklearn.model_selection import train_test_split, KFold, cross_val_score, GridSearchCV
-from sklearn.ensemble import ExtraTreesRegressor, RandomForestRegressor
+from sklearn.model_selection import train_test_split, KFold, cross_val_score
 from sklearn.metrics import mean_squared_error, r2_score
-from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import ExtraTreesRegressor  # Fallback
 
-from ..config import RANDOM_STATE, TEST_SIZE, N_ESTIMATORS_ETR, MAX_DEPTH_ETR, CRITERION_ETR, TARGET_COLUMN
+try:
+    from tabpfn import TabPFNRegressor
+    TABPFN_AVAILABLE = True
+    print("✅ TabPFN available - using foundation model")
+except ImportError:
+    TABPFN_AVAILABLE = False
+    print("⚠️  TabPFN not available - falling back to Extra Trees")
+
+from ..config import RANDOM_STATE, TEST_SIZE, TARGET_COLUMN
 
 
-def prepare_training_data(df: pd.DataFrame, target_col: str = TARGET_COLUMN) -> Tuple[pd.DataFrame, pd.Series]:
-    """Prepares the features and target for model training.
+def get_best_model_for_system() -> str:
+    """Determine the best model based on system capabilities."""
+    if not TABPFN_AVAILABLE:
+        return "extra_trees"
+    
+    # Check GPU availability
+    gpu_available = torch.cuda.is_available()
+    
+    if gpu_available:
+        gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
+        print(f"🚀 GPU detected: {gpu_memory:.1f}GB VRAM")
+        return "tabpfn_gpu"
+    else:
+        print("🖥️  CPU mode - TabPFN will work but slower")
+        return "tabpfn_cpu"
+
+
+# Update the get_tabpfn_model function (around line 50):
+def get_tabpfn_model() -> Any:
+    """Get TabPFN model with proper configuration for large datasets."""
+    if not TABPFN_AVAILABLE:
+        return None
+    
+    try:
+        from tabpfn import TabPFNRegressor
+        
+        # Configure TabPFN with large dataset support (minimal parameters)
+        model = TabPFNRegressor(
+            ignore_pretraining_limits=True,  # ← CRITICAL FIX!
+            device='cpu' if not torch.cuda.is_available() else 'cuda'
+        )
+        
+        return model
+    except Exception as e:
+        print(f"⚠️ Error creating TabPFN model: {e}")
+        return None
+
+
+# Update the train_tabpfn_model function (around line 70):
+def train_tabpfn_model(X_train: pd.DataFrame, y_train: pd.Series, 
+                      use_gpu: bool = True) -> TabPFNRegressor:
+    """Train TabPFN foundation model for risk tolerance prediction.
     
     Args:
-        df (pd.DataFrame): The processed SCF DataFrame.
-        target_col (str): Name of the target column.
+        X_train: Training features
+        y_train: Training targets
+        use_gpu: Whether to use GPU acceleration
         
     Returns:
-        Tuple[pd.DataFrame, pd.Series]: Features (X) and target (y).
+        Trained TabPFN model
     """
-    print("Preparing training data...")
+    print("🧠 Training TabPFN foundation model...")
     
-    # Separate features and target
-    X = df.drop(columns=[target_col])
-    y = df[target_col]
+    # Device selection
+    device = "cuda" if use_gpu and torch.cuda.is_available() else "cpu"
+    print(f"📱 Using device: {device}")
     
-    print(f"Features shape: {X.shape}")
-    print(f"Target shape: {y.shape}")
-    print(f"Feature columns: {list(X.columns)}")
-    
-    return X, y
-
-
-def split_data(X: pd.DataFrame, y: pd.Series, test_size: float = TEST_SIZE, 
-               random_state: int = RANDOM_STATE) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
-    """Splits the data into training and testing sets.
-    
-    Args:
-        X (pd.DataFrame): Features.
-        y (pd.Series): Target.
-        test_size (float): Proportion of data for testing.
-        random_state (int): Random state for reproducibility.
-        
-    Returns:
-        Tuple: X_train, X_test, y_train, y_test
-    """
-    print(f"Splitting data with test_size={test_size}, random_state={random_state}")
-    
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=test_size, random_state=random_state
+    # Initialize TabPFN regressor with large dataset support (minimal parameters)
+    model = TabPFNRegressor(
+        device=device,
+        ignore_pretraining_limits=True  # ← CRITICAL FIX!
     )
     
-    print(f"Training set: {X_train.shape[0]} samples")
-    print(f"Test set: {X_test.shape[0]} samples")
-    
-    return X_train, X_test, y_train, y_test
-
-
-def train_extra_trees_model(X_train: pd.DataFrame, y_train: pd.Series, 
-                           n_estimators: int = N_ESTIMATORS_ETR,
-                           criterion: str = CRITERION_ETR,
-                           max_depth: int = MAX_DEPTH_ETR,
-                           random_state: int = RANDOM_STATE) -> ExtraTreesRegressor:
-    """Trains an Extra Trees Regressor model with the best parameters from notebook.
-    
-    Args:
-        X_train (pd.DataFrame): Training features.
-        y_train (pd.Series): Training target.
-        n_estimators (int): Number of trees.
-        criterion (str): Splitting criterion.
-        max_depth (int): Maximum depth of trees.
-        random_state (int): Random state for reproducibility.
-        
-    Returns:
-        ExtraTreesRegressor: Trained model.
-    """
-    print("Training Extra Trees Regressor model...")
-    print(f"Parameters: n_estimators={n_estimators}, criterion={criterion}, max_depth={max_depth}")
-    
-    model = ExtraTreesRegressor(
-        n_estimators=n_estimators,
-        criterion=criterion,
-        max_depth=max_depth,
-        random_state=random_state,
-        n_jobs=-1
-    )
-    
+    # Train the model
+    print("🔄 Training in progress...")
     model.fit(X_train, y_train)
-    print("Model training completed")
+    print("✅ TabPFN training completed!")
     
     return model
 
 
-def evaluate_model(model: Any, X_train: pd.DataFrame, y_train: pd.Series,
-                  X_test: pd.DataFrame, y_test: pd.Series) -> Dict[str, float]:
-    """Evaluates the trained model on training and test sets.
+def train_extra_trees_fallback(X_train: pd.DataFrame, y_train: pd.Series) -> ExtraTreesRegressor:
+    """Fallback to Extra Trees if TabPFN unavailable."""
+    from ..config import N_ESTIMATORS_ETR, MAX_DEPTH_ETR, CRITERION_ETR
+    
+    print("🌲 Training Extra Trees fallback model...")
+    
+    model = ExtraTreesRegressor(
+        n_estimators=N_ESTIMATORS_ETR,
+        criterion=CRITERION_ETR,
+        max_depth=MAX_DEPTH_ETR,
+        random_state=RANDOM_STATE,
+        n_jobs=-1
+    )
+    
+    model.fit(X_train, y_train)
+    print("✅ Extra Trees training completed")
+    
+    return model
+
+
+def train_risk_tolerance_model(X: pd.DataFrame, y: pd.Series, 
+                             test_size: float = TEST_SIZE,
+                             random_state: int = RANDOM_STATE) -> Tuple[Any, Dict[str, float]]:
+    """Train the best available model for risk tolerance prediction.
     
     Args:
-        model: Trained model.
-        X_train (pd.DataFrame): Training features.
-        y_train (pd.Series): Training target.
-        X_test (pd.DataFrame): Test features.
-        y_test (pd.Series): Test target.
+        X: Feature matrix
+        y: Target vector  
+        test_size: Test split ratio
+        random_state: Random seed
         
     Returns:
-        Dict[str, float]: Dictionary containing evaluation metrics.
+        Tuple of (trained_model, performance_metrics)
     """
-    print("Evaluating model performance...")
+    print("🎯 Starting risk tolerance model training...")
     
-    # Make predictions
+    # Split data
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=test_size, random_state=random_state
+    )
+    
+    print(f"📊 Dataset split: {len(X_train)} train, {len(X_test)} test samples")
+    
+    # Determine best model
+    model_type = get_best_model_for_system()
+    
+    # Train appropriate model
+    if model_type == "tabpfn_gpu":
+        model = train_tabpfn_model(X_train, y_train, use_gpu=True)
+        model_name = "TabPFN (GPU)"
+    elif model_type == "tabpfn_cpu":
+        model = train_tabpfn_model(X_train, y_train, use_gpu=False)
+        model_name = "TabPFN (CPU)"
+    else:
+        model = train_extra_trees_fallback(X_train, y_train)
+        model_name = "Extra Trees"
+    
+    # Evaluate model
+    print(f"📈 Evaluating {model_name} performance...")
+    
     y_pred_train = model.predict(X_train)
     y_pred_test = model.predict(X_test)
     
-    # Calculate metrics
     metrics = {
+        'model_type': model_name,
         'train_r2': r2_score(y_train, y_pred_train),
         'test_r2': r2_score(y_test, y_pred_test),
         'train_rmse': mean_squared_error(y_train, y_pred_train, squared=False),
@@ -133,277 +169,186 @@ def evaluate_model(model: Any, X_train: pd.DataFrame, y_train: pd.Series,
     }
     
     # Print results
-    print(f"Training R²: {metrics['train_r2']:.5f}")
-    print(f"Test R²: {metrics['test_r2']:.5f}")
-    print(f"Training RMSE: {metrics['train_rmse']:.5f}")
-    print(f"Test RMSE: {metrics['test_rmse']:.5f}")
+    print(f"\n📊 {model_name} Performance:")
+    print(f"   Training R²:  {metrics['train_r2']:.5f}")
+    print(f"   Test R²:      {metrics['test_r2']:.5f}")
+    print(f"   Training RMSE: {metrics['train_rmse']:.5f}")
+    print(f"   Test RMSE:     {metrics['test_rmse']:.5f}")
     
-    return metrics
+    return model, metrics
 
 
-def cross_validate_model(model: Any, X: pd.DataFrame, y: pd.Series, 
-                        cv_folds: int = 10, random_state: int = RANDOM_STATE) -> Dict[str, float]:
-    """Performs cross-validation on the model.
+def cross_validate_model(X: pd.DataFrame, y: pd.Series, 
+                        cv_folds: int = 5) -> Tuple[List[float], float, float]:
+    """Perform cross-validation with intelligent model selection."""
+    print(f"🔄 Performing {cv_folds}-fold cross-validation...")
     
-    Args:
-        model: Model to cross-validate.
-        X (pd.DataFrame): Features.
-        y (pd.Series): Target.
-        cv_folds (int): Number of cross-validation folds.
-        random_state (int): Random state for reproducibility.
-        
-    Returns:
-        Dict[str, float]: Cross-validation results.
-    """
-    print(f"Performing {cv_folds}-fold cross-validation...")
+    # Check dataset size and choose appropriate strategy
+    n_samples = len(X)
+    print(f"📊 Dataset size: {n_samples:,} samples")
     
-    kfold = KFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
+    if n_samples > 10000:
+        print("📊 Large dataset detected - using TabPFN with override limits")
     
-    # Cross-validate RMSE (convert to positive values)
-    cv_rmse_scores = -1 * cross_val_score(model, X, y, cv=kfold, 
-                                         scoring='neg_root_mean_squared_error')
+    # Determine model type
+    model_type = get_best_model_for_system()
     
-    # Cross-validate R²
-    cv_r2_scores = cross_val_score(model, X, y, cv=kfold, scoring='r2')
-    
-    results = {
-        'cv_rmse_mean': cv_rmse_scores.mean(),
-        'cv_rmse_std': cv_rmse_scores.std(),
-        'cv_r2_mean': cv_r2_scores.mean(),
-        'cv_r2_std': cv_r2_scores.std()
-    }
-    
-    print(f"Cross-validation RMSE: {results['cv_rmse_mean']:.5f} (+/- {results['cv_rmse_std']:.5f})")
-    print(f"Cross-validation R²: {results['cv_r2_mean']:.5f} (+/- {results['cv_r2_std']:.5f})")
-    
-    return results
-
-
-def analyze_feature_importance(model: ExtraTreesRegressor, feature_names: List[str], 
-                              top_n: int = 10, save_plot: Optional[Path] = None) -> pd.Series:
-    """Analyzes and visualizes feature importance from the trained model.
-    
-    Args:
-        model (ExtraTreesRegressor): Trained Extra Trees model.
-        feature_names (List[str]): List of feature names.
-        top_n (int): Number of top features to display.
-        save_plot (Optional[Path]): Path to save the plot.
-        
-    Returns:
-        pd.Series: Feature importance scores.
-    """
-    print("Analyzing feature importance...")
-    
-    # Get feature importance
-    importance_scores = pd.Series(model.feature_importances_, index=feature_names)
-    importance_scores = importance_scores.sort_values(ascending=False)
-    
-    # Display top features
-    print(f"Top {top_n} most important features:")
-    for i, (feature, score) in enumerate(importance_scores.head(top_n).items(), 1):
-        print(f"{i:2d}. {feature}: {score:.4f}")
-    
-    # Create visualization
-    plt.figure(figsize=(10, 8))
-    importance_scores.head(top_n).plot(kind='barh')
-    plt.title(f'Top {top_n} Feature Importances - Extra Trees Regressor')
-    plt.xlabel('Feature Importance')
-    plt.ylabel('Features')
-    plt.tight_layout()
-    
-    if save_plot:
-        plt.savefig(save_plot, dpi=300, bbox_inches='tight')
-        print(f"Feature importance plot saved to {save_plot}")
-    
-    plt.show()
-    
-    return importance_scores
-
-
-def hyperparameter_tuning(X_train: pd.DataFrame, y_train: pd.Series, 
-                         cv_folds: int = 5, random_state: int = RANDOM_STATE,
-                         verbose: bool = True) -> Tuple[ExtraTreesRegressor, Dict[str, Any]]:
-    """Performs hyperparameter tuning for Extra Trees Regressor.
-    
-    Note: This is a simplified version. The full grid search from the notebook
-    would take too long for regular execution.
-    
-    Args:
-        X_train (pd.DataFrame): Training features.
-        y_train (pd.Series): Training target.
-        cv_folds (int): Number of cross-validation folds.
-        random_state (int): Random state for reproducibility.
-        verbose (bool): Whether to print verbose output.
-        
-    Returns:
-        Tuple[ExtraTreesRegressor, Dict]: Best model and grid search results.
-    """
-    print("Performing hyperparameter tuning...")
-    
-    # Define parameter grid (simplified version)
-    param_grid = {
-        "n_estimators": [25, 50, 100],
-        "criterion": ['squared_error', 'friedman_mse'],
-        "max_depth": [25, 50, None]
-    }
-    
-    # Initialize model
-    model = ExtraTreesRegressor(random_state=random_state, n_jobs=-1)
-    
-    # Setup cross-validation
-    kfold = KFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
-    
-    # Perform grid search
-    grid_search = GridSearchCV(
-        estimator=model, 
-        param_grid=param_grid, 
-        scoring='neg_root_mean_squared_error',
-        cv=kfold, 
-        verbose=1 if verbose else 0,
-        n_jobs=-1
-    )
-    
-    grid_result = grid_search.fit(X_train, y_train)
-    
-    print(f"Best RMSE: {-grid_result.best_score_:.5f}")
-    print(f"Best parameters: {grid_result.best_params_}")
-    
-    if verbose:
-        print("\nAll results:")
-        means = -grid_result.cv_results_['mean_test_score']
-        stds = grid_result.cv_results_['std_test_score']
-        params = grid_result.cv_results_['params']
-        
-        for mean, std, param in zip(means, stds, params):
-            print(f"RMSE: {mean:.5f} (+/- {std:.5f}) with: {param}")
-    
-    return grid_result.best_estimator_, grid_result.cv_results_
-
-
-def save_model(model: Any, filepath: Path, compress: bool = True) -> None:
-    """Saves the trained model to disk.
-    
-    Args:
-        model: The trained model object.
-        filepath (Path): Path where to save the model.
-        compress (bool): Whether to use bz2 compression.
-    """
-    try:
-        # Ensure directory exists
-        filepath.parent.mkdir(parents=True, exist_ok=True)
-        
-        if compress:
-            # Save with bz2 compression (as done in notebook)
-            with bz2.BZ2File(str(filepath) + '.pbz2', 'w') as f:
-                cPickle.dump(model, f)
-            print(f"Compressed model saved to {filepath}.pbz2")
+    # Initialize model with large dataset support
+    if model_type.startswith("tabpfn") and TABPFN_AVAILABLE:
+        # For TabPFN with large datasets, use smaller CV folds or subsampling
+        if n_samples > 20000:
+            print("⚡ Large dataset: Using stratified subsampling for faster CV")
+            # Option 1: Use subset for CV (recommended for speed)
+            subset_size = min(15000, n_samples)
+            indices = np.random.choice(n_samples, size=subset_size, replace=False)
+            X_cv, y_cv = X.iloc[indices], y.iloc[indices]
+            print(f"📊 Using {subset_size:,} samples for cross-validation")
         else:
-            # Save with joblib
-            joblib.dump(model, filepath)
-            print(f"Model saved to {filepath}")
+            X_cv, y_cv = X, y
             
-    except Exception as e:
-        print(f"Error saving model: {e}")
-        raise
-
-
-def load_model(filepath: Path, compressed: bool = True) -> Any:
-    """Loads a saved model from disk.
-    
-    Args:
-        filepath (Path): Path to the saved model.
-        compressed (bool): Whether the model is bz2 compressed.
+        # Use smaller k-fold for large datasets
+        cv_folds = min(cv_folds, 3) if n_samples > 20000 else cv_folds
+        print(f"🔄 Using {cv_folds}-fold cross-validation")
         
-    Returns:
-        The loaded model object.
-    """
-    try:
-        if compressed:
-            # Load compressed model
-            if not str(filepath).endswith('.pbz2'):
-                filepath = Path(str(filepath) + '.pbz2')
-            
-            with bz2.BZ2File(str(filepath), 'rb') as f:
-                model = cPickle.load(f)
-            print(f"Compressed model loaded from {filepath}")
-        else:
-            # Load with joblib
-            model = joblib.load(filepath)
-            print(f"Model loaded from {filepath}")
+        # Get TabPFN model with large dataset support
+        model = get_tabpfn_model()
+        model_name = f"TabPFN (CPU)"
         
-        return model
-        
-    except FileNotFoundError:
-        print(f"Model file not found at {filepath}")
-        raise
-    except Exception as e:
-        print(f"Error loading model: {e}")
-        raise
-
-
-def predict_risk_tolerance(model: Any, features: pd.DataFrame) -> np.ndarray:
-    """Makes risk tolerance predictions using the trained model.
-    
-    Args:
-        model: Trained model.
-        features (pd.DataFrame): Input features for prediction.
-        
-    Returns:
-        np.ndarray: Predicted risk tolerance values.
-    """
-    predictions = model.predict(features)
-    return predictions
-
-
-def train_complete_pipeline(df: pd.DataFrame, save_model_path: Optional[Path] = None,
-                           perform_tuning: bool = False) -> Tuple[Any, Dict[str, Any]]:
-    """Runs the complete risk tolerance model training pipeline.
-    
-    This function orchestrates the entire training process as done in the notebook.
-    
-    Args:
-        df (pd.DataFrame): Processed SCF dataset.
-        save_model_path (Optional[Path]): Path to save the trained model.
-        perform_tuning (bool): Whether to perform hyperparameter tuning.
-        
-    Returns:
-        Tuple[Any, Dict]: Trained model and evaluation results.
-    """
-    print("Starting complete risk tolerance model training pipeline...")
-    print("=" * 70)
-    
-    # Step 1: Prepare data
-    X, y = prepare_training_data(df)
-    X_train, X_test, y_train, y_test = split_data(X, y)
-    
-    # Step 2: Train model
-    if perform_tuning:
-        print("Training with hyperparameter tuning...")
-        model, _ = hyperparameter_tuning(X_train, y_train)
+        if torch.cuda.is_available():
+            model_name = f"TabPFN (GPU)"
     else:
-        print("Training with best known parameters...")
-        model = train_extra_trees_model(X_train, y_train)
+        X_cv, y_cv = X, y
+        from ..config import N_ESTIMATORS_ETR, MAX_DEPTH_ETR, CRITERION_ETR
+        model = ExtraTreesRegressor(
+            n_estimators=N_ESTIMATORS_ETR,
+            max_depth=MAX_DEPTH_ETR,
+            criterion=CRITERION_ETR,
+            random_state=RANDOM_STATE,
+            n_jobs=-1
+        )
+        model_name = "Extra Trees"
     
-    # Step 3: Evaluate model
-    metrics = evaluate_model(model, X_train, y_train, X_test, y_test)
-    cv_results = cross_validate_model(model, X, y)
+    # Perform cross-validation
+    kfold = KFold(n_splits=cv_folds, shuffle=True, random_state=RANDOM_STATE)
     
-    # Step 4: Analyze feature importance
-    feature_importance = analyze_feature_importance(model, list(X.columns))
+    try:
+        cv_scores = -cross_val_score(model, X_cv, y_cv, cv=kfold, 
+                                   scoring='neg_mean_squared_error', n_jobs=1)
+        
+        # Convert to RMSE
+        cv_rmse_scores = np.sqrt(cv_scores)
+        cv_mean = cv_rmse_scores.mean()
+        cv_std = cv_rmse_scores.std()
+        
+        print(f"📊 Cross-validation completed:")
+        print(f"   CV RMSE: {cv_mean:.5f} (+/- {cv_std*2:.5f})")
+        print(f"   Individual folds: {[f'{score:.5f}' for score in cv_rmse_scores]}")
+        
+        return cv_rmse_scores.tolist(), cv_mean, cv_std
+        
+    except Exception as e:
+        print(f"❌ Cross-validation failed: {e}")
+        print("🔄 Falling back to Extra Trees for cross-validation...")
+        
+        # Fallback to Extra Trees
+        from ..config import N_ESTIMATORS_ETR, MAX_DEPTH_ETR, CRITERION_ETR
+        et_model = ExtraTreesRegressor(
+            n_estimators=N_ESTIMATORS_ETR,
+            max_depth=MAX_DEPTH_ETR,
+            criterion=CRITERION_ETR,
+            random_state=RANDOM_STATE,
+            n_jobs=-1
+        )
+        
+        cv_scores = -cross_val_score(et_model, X, y, cv=kfold, 
+                                   scoring='neg_mean_squared_error', n_jobs=-1)
+        cv_rmse_scores = np.sqrt(cv_scores)
+        cv_mean = cv_rmse_scores.mean()
+        cv_std = cv_rmse_scores.std()
+        
+        print(f"📊 Extra Trees CV RMSE: {cv_mean:.5f} (+/- {cv_std*2:.5f})")
+        
+        return cv_rmse_scores.tolist(), cv_mean, cv_std
+
+
+def plot_feature_importance(model: Any, feature_names: List[str], 
+                          save_path: Optional[Path] = None) -> None:
+    """Plot feature importance (when available).
     
-    # Step 5: Save model if requested
-    if save_model_path:
-        save_model(model, save_model_path)
+    Args:
+        model: Trained model
+        feature_names: List of feature names
+        save_path: Optional path to save plot
+    """
+    if hasattr(model, 'feature_importances_'):
+        # Extra Trees has feature importance
+        importance_scores = pd.Series(model.feature_importances_, index=feature_names)
+        importance_scores = importance_scores.sort_values(ascending=False)
+        
+        plt.figure(figsize=(10, 8))
+        importance_scores.head(10).plot(kind='barh')
+        plt.title('Feature Importance - Extra Trees Model')
+        plt.xlabel('Importance Score')
+        plt.tight_layout()
+        
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"📊 Feature importance plot saved to {save_path}")
+        
+        plt.show()
+    else:
+        print("ℹ️  Feature importance not available for TabPFN (foundation model)")
+        print("   TabPFN automatically learns optimal feature relationships")
+
+
+def save_compressed_model(model: Any, filepath: Path) -> None:
+    """Save model with compression."""
+    filepath.parent.mkdir(parents=True, exist_ok=True)
     
-    # Combine results
-    results = {
+    # Add model type info for loading
+    model_info = {
         'model': model,
-        'metrics': metrics,
-        'cv_results': cv_results,
-        'feature_importance': feature_importance
+        'model_type': type(model).__name__,
+        'tabpfn_available': TABPFN_AVAILABLE
     }
     
-    print("=" * 70)
-    print("Risk tolerance model training completed successfully!")
+    joblib.dump(model_info, filepath)
+    print(f"💾 Model saved to {filepath}")
+
+
+def load_compressed_model(filepath: Path) -> Any:
+    """Load model with type checking."""
+    if not filepath.exists():
+        raise FileNotFoundError(f"Model file not found: {filepath}")
     
-    return model, results
+    model_info = joblib.load(filepath)
+    
+    # Handle backward compatibility
+    if isinstance(model_info, dict) and 'model' in model_info:
+        model = model_info['model']
+        model_type = model_info.get('model_type', 'Unknown')
+        print(f"📂 Loaded {model_type} model from {filepath}")
+    else:
+        # Old format - just the model
+        model = model_info
+        print(f"📂 Loaded model from {filepath}")
+    
+    return model
+
+
+def evaluate_model(model: Any, X_test: pd.DataFrame, y_test: pd.Series) -> Dict[str, float]:
+    """Evaluate model performance."""
+    y_pred = model.predict(X_test)
+    
+    return {
+        'r2_score': r2_score(y_test, y_pred),
+        'rmse': mean_squared_error(y_test, y_pred, squared=False),
+        'mae': np.mean(np.abs(y_test - y_pred))
+    }
+
+
+# Backward compatibility functions
+def train_extra_trees_model(X_train: pd.DataFrame, y_train: pd.Series, **kwargs) -> Any:
+    """Backward compatibility wrapper."""
+    print("⚠️  Using deprecated function. Consider train_risk_tolerance_model()")
+    return train_extra_trees_fallback(X_train, y_train)
