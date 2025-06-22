@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 import sys
 import os
+import socket
 from pathlib import Path
 
 try:
@@ -36,11 +37,30 @@ st.set_page_config(
 st.title("🤖 AI-Powered Robo-Advisor")
 st.markdown("### Intelligent Portfolio Optimization with Reinforcement Learning")
 
+# IMPROVED CLOUD DETECTION
+def detect_cloud_environment():
+    """Detect if running on Streamlit Cloud or locally."""
+    cloud_indicators = [
+        os.environ.get('STREAMLIT_CLOUD') == 'true',
+        os.environ.get('STREAMLIT_SHARING') == 'true',
+        'streamlit.io' in socket.getfqdn().lower(),
+        'streamlitapp.com' in socket.getfqdn().lower(),
+        os.path.exists('/.streamlit'),
+        'SPACE_ID' in os.environ,  # Hugging Face Spaces
+        'RENDER' in os.environ,    # Render
+        'RAILWAY' in os.environ,   # Railway
+        'HOSTNAME' in os.environ and 'streamlit' in os.environ.get('HOSTNAME', '').lower(),
+        # Additional cloud platform indicators
+        os.path.exists('/opt/conda'),  # Common in cloud environments
+        os.environ.get('PWD', '').startswith('/mount/src/'),  # Streamlit Cloud specific
+    ]
+    return any(cloud_indicators)
+
 # Check environment
-is_cloud = os.environ.get('STREAMLIT_CLOUD') == 'true'
+is_cloud = detect_cloud_environment()
 
 if is_cloud:
-    st.info("🌩️ **Cloud Mode**: Using optimized MPT allocation")
+    st.info("🌩️ **Cloud Mode**: Using memory-optimized MPT allocation")
     st.caption("Running on Streamlit Community Cloud with memory-optimized AI")
 else:
     st.info("🖥️ **Local Mode**: Full RL training capabilities available")
@@ -121,7 +141,7 @@ investment_amount = st.sidebar.number_input(
     help="Total amount to invest"
 )
 
-# MARKET REGIME DETECTION
+# MARKET REGIME DETECTION WITH CLOUD FALLBACK
 st.sidebar.markdown("---")
 st.sidebar.header("📊 Market Analysis")
 
@@ -141,16 +161,23 @@ try:
         else:
             st.sidebar.success(regime_info["message"])
     else:
-        st.sidebar.warning("Market data not available for regime detection")
+        if is_cloud:
+            st.sidebar.info("📊 **Cloud Mode**: Using default market assessment")
+        else:
+            st.sidebar.warning("Market data not available for regime detection")
         current_regime = "🔵 Moderate Volatility/Stable"
 except Exception as e:
-    st.sidebar.error(f"Market analysis failed: {e}")
-    current_regime = "🔵 Moderate Volatility/Stable"
+    if is_cloud:
+        st.sidebar.info("📊 **Cloud Mode**: Market analysis simplified for cloud deployment")
+        current_regime = "🔵 Moderate Volatility/Stable"
+    else:
+        st.sidebar.error(f"Market analysis failed: {e}")
+        current_regime = "🔵 Moderate Volatility/Stable"
     
-# ADD THIS DEBUG SECTION HERE (after line 148):
-if st.sidebar.checkbox("🔍 Market Debug Info"):
+# Market Debug Info (only show in local mode or if data available)
+if not is_cloud and st.sidebar.checkbox("🔍 Market Debug Info"):
     try:
-        if market_data_path.exists():
+        if 'market_data_path' in locals() and market_data_path.exists():
             df = pd.read_csv(market_data_path, index_col=0, parse_dates=True)
             recent_data = df.tail(252)
             
@@ -183,6 +210,12 @@ st.sidebar.markdown(f"**Risk Profile:** {risk_profile}")
 st.sidebar.markdown(f"**Investment Style:** {risk_preference}")
 st.sidebar.markdown(f"**Assets:** {len(selected_assets)} selected")
 st.sidebar.markdown(f"**Investment:** ${investment_amount:,}")
+
+# Environment indicator
+if is_cloud:
+    st.sidebar.info("🌩️ Cloud deployment detected")
+else:
+    st.sidebar.success("🖥️ Local environment detected")
 
 # Generate Portfolio Button
 generate_portfolio = st.sidebar.button(
@@ -226,224 +259,213 @@ if not generate_portfolio:
         **Configure your preferences in the sidebar and click 'Generate Portfolio' to begin!**
         """)
     
-    # ADD DYNAMIC HISTORICAL PERIOD ANALYSIS SECTION
-    st.subheader("📊 Historical Period Analysis")
-    
-    # Add disclaimer about period dependency
-    st.info("""
-    ⚠️ **Important**: AI results depend on historical periods. Our data covers 2010-2023 (largely bull market).
-    Performance may differ significantly in bear markets or high-inflation periods.
-    """)
-    
-    # Period selection with dynamic analysis
-    period_options = {
-        "🐂 Bull Market (2010-2019)": ("2010-01-01", "2019-12-31"),
-        "🦠 COVID Period (2020-2022)": ("2020-01-01", "2022-12-31"), 
-        "📈 Full Period (2010-2023)": ("2010-01-01", "2023-09-08"),
-        "🎯 Custom Period": None
-    }
-    
-    selected_period = st.selectbox("Historical Test Period:", list(period_options.keys()))
-    
-    if selected_period == "🎯 Custom Period":
-        col1, col2 = st.columns(2)
-        with col1:
-            start_date = st.date_input("Start Date", pd.to_datetime("2010-01-01"))
-        with col2:
-            end_date = st.date_input("End Date", pd.to_datetime("2023-09-08"))
-        period_start = start_date.strftime("%Y-%m-%d")
-        period_end = end_date.strftime("%Y-%m-%d")
-    else:
-        period_start, period_end = period_options[selected_period]
-        st.write(f"**Selected Period:** {period_start} to {period_end}")
-    
-    # DYNAMIC ANALYSIS BASED ON SELECTED PERIOD
-    try:
-        market_data_path = config.PROCESSED_DATA_DIR / config.PROCESSED_SP500_FILE
-        if market_data_path.exists():
-            # Load and filter data for selected period
-            full_data = pd.read_csv(market_data_path, index_col=0, parse_dates=True)
-            
-            # Filter for selected period
-            period_data = full_data[period_start:period_end]
-            
-            if len(period_data) > 30:  # Ensure enough data
-                # Calculate period-specific metrics
-                returns = period_data.pct_change().dropna()
+    # HISTORICAL PERIOD ANALYSIS (only in local mode for now)
+    if not is_cloud:
+        st.subheader("📊 Historical Period Analysis")
+        
+        # Add disclaimer about period dependency
+        st.info("""
+        ⚠️ **Important**: AI results depend on historical periods. Our data covers 2010-2023 (largely bull market).
+        Performance may differ significantly in bear markets or high-inflation periods.
+        """)
+        
+        # Period selection with dynamic analysis
+        period_options = {
+            "🐂 Bull Market (2010-2019)": ("2010-01-01", "2019-12-31"),
+            "🦠 COVID Period (2020-2022)": ("2020-01-01", "2022-12-31"), 
+            "📈 Full Period (2010-2023)": ("2010-01-01", "2023-09-08"),
+            "🎯 Custom Period": None
+        }
+        
+        selected_period = st.selectbox("Historical Test Period:", list(period_options.keys()))
+        
+        if selected_period == "🎯 Custom Period":
+            col1, col2 = st.columns(2)
+            with col1:
+                start_date = st.date_input("Start Date", pd.to_datetime("2010-01-01"))
+            with col2:
+                end_date = st.date_input("End Date", pd.to_datetime("2023-09-08"))
+            period_start = start_date.strftime("%Y-%m-%d")
+            period_end = end_date.strftime("%Y-%m-%d")
+        else:
+            period_start, period_end = period_options[selected_period]
+            st.write(f"**Selected Period:** {period_start} to {period_end}")
+        
+        # DYNAMIC ANALYSIS BASED ON SELECTED PERIOD
+        try:
+            market_data_path = config.PROCESSED_DATA_DIR / config.PROCESSED_SP500_FILE
+            if market_data_path.exists():
+                # Load and filter data for selected period
+                full_data = pd.read_csv(market_data_path, index_col=0, parse_dates=True)
                 
-                if len(returns) > 0:
-                    # Calculate metrics for each strategy type
-                    period_volatility = returns.std().mean() * np.sqrt(252)
-                    period_return = ((period_data.iloc[-1] / period_data.iloc[0]) ** (252/len(period_data)) - 1).mean()
+                # Filter for selected period
+                period_data = full_data[period_start:period_end]
+                
+                if len(period_data) > 30:  # Ensure enough data
+                    # Calculate period-specific metrics
+                    returns = period_data.pct_change().dropna()
                     
-                    # Estimate Sharpe ratios based on period characteristics
-                    if period_volatility > 0.25:  # High volatility period
-                        conservative_sharpe = max(0.4, 1.2 - period_volatility)
-                        balanced_sharpe = max(0.3, 1.0 - period_volatility)
-                        aggressive_sharpe = max(0.1, 0.8 - period_volatility)
-                        period_type = "High Volatility"
-                    elif period_return > 0.15:  # Bull market
-                        conservative_sharpe = min(1.2, 0.8 + period_return)
-                        balanced_sharpe = min(1.3, 1.0 + period_return)
-                        aggressive_sharpe = min(1.6, 1.2 + period_return)
-                        period_type = "Bull Market"
-                    elif period_return < -0.05:  # Bear market
-                        conservative_sharpe = max(0.6, 1.0 + period_return)
-                        balanced_sharpe = max(0.4, 0.7 + period_return)
-                        aggressive_sharpe = max(0.1, 0.4 + period_return)
-                        period_type = "Bear Market"
-                    else:  # Moderate market
-                        conservative_sharpe = 1.0
-                        balanced_sharpe = 0.9
-                        aggressive_sharpe = 0.8
-                        period_type = "Moderate"
-                    
-                    # Show dynamic results table
-                    st.subheader(f"📈 Strategy Performance - {selected_period} ({period_type})")
-                    
-                    # DYNAMIC results table
-                    dynamic_results = pd.DataFrame({
-                        'Strategy': ['Conservative RL', 'Balanced RL', 'Aggressive RL'],
-                        'Estimated Sharpe': [conservative_sharpe, balanced_sharpe, aggressive_sharpe],
-                        'Risk Level': ['Low', 'Medium', 'High'],
-                        'Best For': ['Capital Preservation', 'Balanced Growth', 'Maximum Returns']
-                    })
-                    
-                    # Style the table based on performance - PROFESSIONAL BLUE THEME
-                    def color_performance(val):
-                        if val > 1.0:
-                            return 'background-color: #1565C0; color: white; font-weight: bold'  # Dark blue (excellent)
-                        elif val > 0.5:
-                            return 'background-color: #FFB74D; color: black; font-weight: bold'  # Orange (good)
+                    if len(returns) > 0:
+                        # Calculate metrics for each strategy type
+                        period_volatility = returns.std().mean() * np.sqrt(252)
+                        period_return = ((period_data.iloc[-1] / period_data.iloc[0]) ** (252/len(period_data)) - 1).mean()
+                        
+                        # Estimate Sharpe ratios based on period characteristics
+                        if period_volatility > 0.25:  # High volatility period
+                            conservative_sharpe = max(0.4, 1.2 - period_volatility)
+                            balanced_sharpe = max(0.3, 1.0 - period_volatility)
+                            aggressive_sharpe = max(0.1, 0.8 - period_volatility)
+                            period_type = "High Volatility"
+                        elif period_return > 0.15:  # Bull market
+                            conservative_sharpe = min(1.2, 0.8 + period_return)
+                            balanced_sharpe = min(1.3, 1.0 + period_return)
+                            aggressive_sharpe = min(1.6, 1.2 + period_return)
+                            period_type = "Bull Market"
+                        elif period_return < -0.05:  # Bear market
+                            conservative_sharpe = max(0.6, 1.0 + period_return)
+                            balanced_sharpe = max(0.4, 0.7 + period_return)
+                            aggressive_sharpe = max(0.1, 0.4 + period_return)
+                            period_type = "Bear Market"
+                        else:  # Moderate market
+                            conservative_sharpe = 1.0
+                            balanced_sharpe = 0.9
+                            aggressive_sharpe = 0.8
+                            period_type = "Moderate"
+                        
+                        # Show dynamic results table
+                        st.subheader(f"📈 Strategy Performance - {selected_period} ({period_type})")
+                        
+                        # DYNAMIC results table
+                        dynamic_results = pd.DataFrame({
+                            'Strategy': ['Conservative RL', 'Balanced RL', 'Aggressive RL'],
+                            'Estimated Sharpe': [conservative_sharpe, balanced_sharpe, aggressive_sharpe],
+                            'Risk Level': ['Low', 'Medium', 'High'],
+                            'Best For': ['Capital Preservation', 'Balanced Growth', 'Maximum Returns']
+                        })
+                        
+                        # Style the table based on performance
+                        def color_performance(val):
+                            if val > 1.0:
+                                return 'background-color: #1565C0; color: white; font-weight: bold'  # Dark blue (excellent)
+                            elif val > 0.5:
+                                return 'background-color: #FF8F00; color: white; font-weight: bold'  # Dark orange (good)
+                            else:
+                                return 'background-color: #D32F2F; color: white; font-weight: bold'  # Dark red (poor)
+                        
+                        styled_results = dynamic_results.style.applymap(
+                            color_performance, subset=['Estimated Sharpe']
+                        ).format({'Estimated Sharpe': '{:.2f}'})
+                        
+                        st.dataframe(styled_results, use_container_width=True)
+                        
+                        # Period insights
+                        col1, col2, col3 = st.columns(3)
+                        
+                        with col1:
+                            st.metric("Period Volatility", f"{period_volatility:.1%}")
+                        with col2:
+                            st.metric("Period Return", f"{period_return:.1%}")
+                        with col3:
+                            st.metric("Data Points", f"{len(period_data)}")
+                        
+                        # Dynamic recommendations based on period analysis
+                        if period_type == "High Volatility":
+                            st.warning("⚠️ High volatility period detected - Conservative strategies recommended")
+                        elif period_type == "Bull Market":
+                            st.success("📈 Bull market period - Aggressive strategies may outperform")
+                        elif period_type == "Bear Market":
+                            st.error("📉 Bear market period - Focus on capital preservation")
                         else:
-                            return 'background-color: #E57373; color: white; font-weight: bold'  # Light red (poor)
-                    
-                    styled_results = dynamic_results.style.applymap(
-                        color_performance, subset=['Estimated Sharpe']
-                    ).format({'Estimated Sharpe': '{:.2f}'})
-                    
-                    st.dataframe(styled_results, use_container_width=True)
-                    
-                    # Period insights
-                    col1, col2, col3 = st.columns(3)
-                    
-                    with col1:
-                        st.metric("Period Volatility", f"{period_volatility:.1%}")
-                    with col2:
-                        st.metric("Period Return", f"{period_return:.1%}")
-                    with col3:
-                        st.metric("Data Points", f"{len(period_data)}")
-                    
-                    # Dynamic recommendations based on period analysis
-                    if period_type == "High Volatility":
-                        st.warning("⚠️ High volatility period detected - Conservative strategies recommended")
-                    elif period_type == "Bull Market":
-                        st.success("📈 Bull market period - Aggressive strategies may outperform")
-                    elif period_type == "Bear Market":
-                        st.error("📉 Bear market period - Focus on capital preservation")
+                            st.info("📊 Moderate market conditions - Balanced approach recommended")
+                        
+                        # Show best strategy for this period
+                        best_strategy_idx = dynamic_results['Estimated Sharpe'].idxmax()
+                        best_strategy = dynamic_results.loc[best_strategy_idx, 'Strategy']
+                        best_sharpe = dynamic_results.loc[best_strategy_idx, 'Estimated Sharpe']
+                        
+                        st.success(f"🏆 **Best Strategy for {selected_period}**: {best_strategy} (Sharpe: {best_sharpe:.2f})")
+                        
+                        # INTELLIGENT RECONCILIATION with current market regime
+                        if 'current_regime' in locals():
+                            historical_type = best_strategy.split()[0]  # Conservative/Balanced/Aggressive
+                            
+                            regime_advice_map = {
+                                "🔴 High Volatility/Bear Market": "Conservative",
+                                "🟢 Low Volatility/Bull Market": "Aggressive", 
+                                "🟡 High Volatility/Uncertain": "Balanced",
+                                "🔵 Moderate Volatility/Stable": "Balanced"
+                            }
+                            
+                            current_type = regime_advice_map.get(current_regime, "Balanced")
+                            
+                            if historical_type == current_type:
+                                st.success(f"📈 **Unified Recommendation**: {best_strategy}")
+                                st.success(f"✅ Both historical analysis ({selected_period}) and current market conditions support {historical_type} strategy")
+                            else:
+                                st.warning("⚠️ **Mixed Signals Detected**")
+                                
+                                col1, col2 = st.columns(2)
+                                
+                                with col1:
+                                    st.info(f"📊 **Historical Analysis** ({selected_period}):")
+                                    st.info(f"Best: **{best_strategy}** (Sharpe: {best_sharpe:.2f})")
+                                    
+                                with col2:
+                                    st.info(f"🌩️ **Current Market** ({current_regime}):")
+                                    st.info(f"Suggests: **{current_type} RL approach**")
+                                
+                                # Smart reconciliation logic
+                                if best_sharpe > 0.8:
+                                    st.success(f"🎯 **Recommendation**: {best_strategy}")
+                                    st.caption(f"Reason: Strong historical performance (Sharpe {best_sharpe:.2f}) outweighs current regime concerns")
+                                else:
+                                    st.info(f"🎯 **Recommendation**: **{current_type} RL approach** (Current Market Priority)")
+                                    st.caption("Reason: Current market conditions take precedence given mixed historical signals")
+                        
                     else:
-                        st.info("📊 Moderate market conditions - Balanced approach recommended")
-                    
-                    # Show best strategy for this period
-                    best_strategy_idx = dynamic_results['Estimated Sharpe'].idxmax()
-                    best_strategy = dynamic_results.loc[best_strategy_idx, 'Strategy']
-                    best_sharpe = dynamic_results.loc[best_strategy_idx, 'Estimated Sharpe']
-                    
-                    st.success(f"🏆 **Best Strategy for {selected_period}**: {best_strategy} (Sharpe: {best_sharpe:.2f})")
-                    
+                        st.warning("⚠️ Insufficient return data for selected period")
+                        
                 else:
-                    st.warning("⚠️ Insufficient return data for selected period")
+                    st.warning("⚠️ Selected period has insufficient data for analysis")
                     
             else:
-                st.warning("⚠️ Selected period has insufficient data for analysis")
+                st.error("❌ Market data file not found for period analysis")
                 
-        else:
-            st.error("❌ Market data file not found for period analysis")
+        except Exception as analysis_error:
+            st.error(f"❌ Period analysis failed: {str(analysis_error)}")
             
-    except Exception as analysis_error:
-        st.error(f"❌ Period analysis failed: {str(analysis_error)}")
-        
-        # Fallback to static table
-        st.subheader("📈 Strategy Performance by Market Conditions (Static)")
-        fallback_results = pd.DataFrame({
-            'Strategy': ['Conservative RL', 'Balanced RL', 'Aggressive RL'],
-            'Bull Market Sharpe': [1.2, 1.1, 1.4],
-            'Bear Market Sharpe': [0.8, 0.6, 0.3],
-            'High Volatility Sharpe': [1.0, 0.8, 0.5]
-        })
-        st.table(fallback_results)
+            # Fallback to static table
+            st.subheader("📈 Strategy Performance by Market Conditions (Static)")
+            fallback_results = pd.DataFrame({
+                'Strategy': ['Conservative RL', 'Balanced RL', 'Aggressive RL'],
+                'Bull Market Sharpe': [1.2, 1.1, 1.4],
+                'Bear Market Sharpe': [0.8, 0.6, 0.3],
+                'High Volatility Sharpe': [1.0, 0.8, 0.5]
+            })
+            st.table(fallback_results)
     
-    # Dynamic recommendations based on current regime AND selected period - INTELLIGENT VERSION
-    if 'current_regime' in locals():
-        # Get the best strategy from historical analysis
-        if 'dynamic_results' in locals():
-            best_historical_strategy = dynamic_results.loc[dynamic_results['Estimated Sharpe'].idxmax(), 'Strategy']
-            best_sharpe_historical = dynamic_results['Estimated Sharpe'].max()
-            
-            # Current regime base advice
+    else:
+        # Cloud mode - simplified version
+        st.subheader("📊 Strategy Overview")
+        st.info("🌩️ **Cloud Mode**: Simplified analysis for optimal performance")
+        
+        # Show simple current regime advice
+        if 'current_regime' in locals():
             regime_advice = {
-                "🔴 High Volatility/Bear Market": "Conservative RL strategy",
-                "🟢 Low Volatility/Bull Market": "Aggressive RL strategies", 
-                "🟡 High Volatility/Uncertain": "Balanced RL approach",
-                "🔵 Moderate Volatility/Stable": "Balanced strategies"
+                "🔴 High Volatility/Bear Market": "Conservative RL strategies recommended for current conditions",
+                "🟢 Low Volatility/Bull Market": "Aggressive RL strategies may outperform in current conditions", 
+                "🟡 High Volatility/Uncertain": "Balanced RL approach suggested for current uncertainty",
+                "🔵 Moderate Volatility/Stable": "Balanced strategies appear appropriate for current conditions"
             }
             
-            current_advice = regime_advice.get(current_regime, "Balanced strategies")
+            advice = regime_advice.get(current_regime, "Balanced strategies appear appropriate")
             
-            # INTELLIGENT RECONCILIATION
-            if 'best_historical_strategy' in locals():
-                historical_type = best_historical_strategy.split()[0]  # Conservative/Balanced/Aggressive
-                current_type = current_advice.split()[0]  # Conservative/Balanced/Aggressive
-                
-                if historical_type == current_type:
-                    # Agreement - show unified recommendation
-                    st.success(f"📈 **Unified Recommendation**: {best_historical_strategy}")
-                    st.success(f"✅ Both historical analysis ({selected_period}) and current market conditions support {historical_type} strategy")
-                    
-                else:
-                    # Conflict - show both with explanation
-                    st.warning("⚠️ **Mixed Signals Detected**")
-                    
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        st.info(f"📊 **Historical Analysis** ({selected_period}):")
-                        st.info(f"Best: **{best_historical_strategy}** (Sharpe: {best_sharpe_historical:.2f})")
-                        
-                    with col2:
-                        st.info(f"🌩️ **Current Market** ({current_regime}):")
-                        st.info(f"Suggests: **{current_advice}**")
-                    
-                    # Smart reconciliation logic
-                    if period_type == "High Volatility" and "High Volatility" in current_regime:
-                        # Both periods are high volatility - trust historical
-                        st.success(f"🎯 **Recommendation**: {best_historical_strategy}")
-                        st.caption(f"Reason: Both periods show high volatility, historical evidence favors {historical_type}")
-                        
-                    elif best_sharpe_historical > 0.8:
-                        # Strong historical performance
-                        st.success(f"🎯 **Recommendation**: {best_historical_strategy}")
-                        st.caption(f"Reason: Strong historical performance (Sharpe {best_sharpe_historical:.2f}) outweighs current regime concerns")
-                        
-                    else:
-                        # Weak historical evidence - blend recommendations
-                        if historical_type == "Conservative" and current_type == "Balanced":
-                            st.info("🎯 **Recommendation**: **Conservative-Balanced Hybrid**")
-                            st.caption("Reason: Lean towards conservative given historical evidence, but not overly defensive")
-                        elif historical_type == "Aggressive" and current_type == "Balanced":
-                            st.info("🎯 **Recommendation**: **Balanced-Growth Hybrid**")
-                            st.caption("Reason: Moderate growth approach balancing historical opportunity with current caution")
-                        else:
-                            st.info(f"🎯 **Recommendation**: **{current_advice}** (Current Market Priority)")
-                            st.caption("Reason: Current market conditions take precedence given mixed historical signals")
+            if "Bear Market" in current_regime or "High Volatility" in current_regime:
+                st.warning(f"⚠️ {advice}")
+            elif "Bull Market" in current_regime:
+                st.success(f"📈 {advice}")
             else:
-                # No historical analysis available - use current regime only
-                if "Bear Market" in current_regime or "High Volatility" in current_regime:
-                    st.warning(f"⚠️ {current_advice} recommended for current conditions")
-                elif "Bull Market" in current_regime:
-                    st.success(f"📈 {current_advice} favored in current conditions")
-                else:
-                    st.info(f"✅ {current_advice} appropriate for current conditions")
+                st.info(f"✅ {advice}")
 
 else:
     # Portfolio Generation
@@ -474,9 +496,9 @@ else:
                         risk_profile=risk_profile,
                         selected_assets=selected_assets,
                         risk_tolerance=risk_tolerance,
-                        return_weight=return_weight,      # NOW WORKS IN CLOUD!
-                        risk_weight=risk_weight,          # NOW WORKS IN CLOUD!
-                        market_regime=current_regime      # NOW WORKS IN CLOUD!
+                        return_weight=return_weight,
+                        risk_weight=risk_weight,
+                        market_regime=current_regime
                     )
                     
                     # Get memory info for display
@@ -497,14 +519,14 @@ else:
                         
                         manager = RLAgentManager(config.OUTPUT_DIR)
                         
-                        # CHANGED: Pass the dynamic parameters
+                        # Pass the dynamic parameters
                         agent, is_new = manager.get_or_create_agent(
                             risk_profile=risk_profile,
                             selected_assets=selected_assets,
                             market_data=market_data,
-                            return_weight=return_weight,      # ADDED THIS
-                            risk_weight=risk_weight,          # ADDED THIS  
-                            market_regime=current_regime      # ADDED THIS
+                            return_weight=return_weight,
+                            risk_weight=risk_weight,
+                            market_regime=current_regime
                         )
                         
                         # Use RL agent allocation
@@ -680,7 +702,8 @@ else:
                         "total_assets": len(selected_assets),
                         "environment": "Cloud" if is_cloud else "Local",
                         "market_regime": current_regime,
-                        "memory_info": memory_info
+                        "memory_info": memory_info,
+                        "cloud_detection_result": is_cloud
                     })
                 
             except Exception as e:
