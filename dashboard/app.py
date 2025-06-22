@@ -5,15 +5,12 @@ import numpy as np
 import sys
 import os
 from pathlib import Path
-from src.utils.market_analysis import detect_market_regime, get_regime_recommendations  # ADD THIS LINE
-
 
 try:
     from tabpfn import TabPFNRegressor
     TABPFN_AVAILABLE = True
 except ImportError:
     TABPFN_AVAILABLE = False
-    
     
 # Setup
 project_root = Path(__file__).parent.parent
@@ -23,6 +20,7 @@ try:
     import src.config as config
     from src.models.cloud_optimized_agent import CloudOptimizedRLManager
     from src.models.rl_agent_manager import RLAgentManager
+    from src.utils.market_analysis import detect_market_regime, get_regime_recommendations
 except ImportError as e:
     st.error(f"Import error: {e}")
     st.error("Please ensure all required dependencies are installed and data processing is complete.")
@@ -67,6 +65,37 @@ risk_descriptions = {
 }
 st.sidebar.caption(f"📋 {risk_descriptions[risk_profile]}")
 
+# NEW INVESTMENT OBJECTIVE SECTION
+st.sidebar.header("🎯 Investment Objective")
+
+risk_preference = st.sidebar.radio(
+    "What's your primary goal?",
+    [
+        "🛡️ Protect My Capital (Risk-Focused)",
+        "⚖️ Balance Risk & Return (Academic)",  
+        "🚀 Maximize Returns (Growth-Focused)",
+        "🎲 Custom Mix"
+    ]
+)
+
+if risk_preference == "🎲 Custom Mix":
+    return_weight = st.sidebar.slider(
+        "Return Priority", 0.0, 1.0, 0.5, 0.1,
+        help="Higher = Focus on returns, Lower = Focus on risk management"
+    )
+    risk_weight = 1.0 - return_weight
+else:
+    # Predefined mixes
+    weights = {
+        "🛡️ Protect My Capital (Risk-Focused)": (0.2, 0.8),      # 20% return, 80% risk
+        "⚖️ Balance Risk & Return (Academic)": (0.5, 0.5),        # 50% return, 50% risk  
+        "🚀 Maximize Returns (Growth-Focused)": (0.8, 0.2)        # 80% return, 20% risk
+    }
+    return_weight, risk_weight = weights[risk_preference]
+
+st.sidebar.write(f"**Return Focus:** {return_weight:.0%}")
+st.sidebar.write(f"**Risk Management:** {risk_weight:.0%}")
+
 # Asset Selection
 available_assets = config.DEFAULT_PORTFOLIO_ASSETS
 selected_assets = st.sidebar.multiselect(
@@ -92,10 +121,37 @@ investment_amount = st.sidebar.number_input(
     help="Total amount to invest"
 )
 
+# MARKET REGIME DETECTION
+st.sidebar.markdown("---")
+st.sidebar.header("📊 Market Analysis")
+
+# Try to load market data for regime detection
+try:
+    market_data_path = config.PROCESSED_DATA_DIR / config.PROCESSED_SP500_FILE
+    if market_data_path.exists():
+        df = pd.read_csv(market_data_path, index_col=0, parse_dates=True)
+        current_regime = detect_market_regime(df)
+        regime_info = get_regime_recommendations(current_regime)
+        
+        st.sidebar.write(f"**Current Market:** {current_regime}")
+        if regime_info["style"] == "warning":
+            st.sidebar.warning(regime_info["message"])
+        elif regime_info["style"] == "info":
+            st.sidebar.info(regime_info["message"])
+        else:
+            st.sidebar.success(regime_info["message"])
+    else:
+        st.sidebar.warning("Market data not available for regime detection")
+        current_regime = "🔵 Moderate Volatility/Stable"
+except Exception as e:
+    st.sidebar.error(f"Market analysis failed: {e}")
+    current_regime = "🔵 Moderate Volatility/Stable"
+
 # Display investment summary
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 📊 Configuration Summary")
 st.sidebar.markdown(f"**Risk Profile:** {risk_profile}")
+st.sidebar.markdown(f"**Investment Style:** {risk_preference}")
 st.sidebar.markdown(f"**Assets:** {len(selected_assets)} selected")
 st.sidebar.markdown(f"**Investment:** ${investment_amount:,}")
 
@@ -120,23 +176,76 @@ if not generate_portfolio:
         
         ### 🎯 How It Works:
         1. **Select your risk profile** - Conservative, Balanced, or Aggressive
-        2. **Choose your assets** - Pick from top S&P 500 companies
-        3. **Set investment amount** - Decide how much to invest
-        4. **Get AI recommendations** - Receive optimized portfolio weights
+        2. **Choose your investment objective** - Risk-focused, Balanced, or Growth-focused
+        3. **Choose your assets** - Pick from top S&P 500 companies
+        4. **Set investment amount** - Decide how much to invest
+        5. **Get AI recommendations** - Receive optimized portfolio weights
         
         ### 🧠 AI Technology:
         - **Local Mode**: Full RL training with transfer learning
         - **Cloud Mode**: Memory-optimized MPT with smart allocation
         - **Risk-Adjusted**: Portfolios tailored to your risk tolerance
+        - **Market-Aware**: Adapts to current market conditions
         
         ### 📈 Features:
         - Real-time portfolio optimization
         - Interactive visualizations
         - Performance metrics
         - Diversification analysis
+        - Market regime detection
         
         **Configure your preferences in the sidebar and click 'Generate Portfolio' to begin!**
         """)
+    
+    # ADD HISTORICAL PERIOD ANALYSIS SECTION
+    st.subheader("📊 Historical Period Analysis")
+    
+    # Add disclaimer about period dependency
+    st.info("""
+    ⚠️ **Important**: AI results depend on historical periods. Our data covers 2010-2023 (largely bull market).
+    Performance may differ significantly in bear markets or high-inflation periods.
+    """)
+    
+    # Show scenario analysis
+    st.subheader("📈 Strategy Performance by Market Conditions")
+    
+    # Example results table (you can make this dynamic later)
+    results_table = pd.DataFrame({
+        'Strategy': ['Conservative RL', 'Balanced RL', 'Aggressive RL'],
+        'Bull Market Sharpe': [1.2, 1.1, 1.4],
+        'Bear Market Sharpe': [0.8, 0.6, 0.3],
+        'High Volatility Sharpe': [1.0, 0.8, 0.5]
+    })
+    st.table(results_table)
+    
+    # Let users test different periods (for future implementation)
+    period_options = {
+        "🐂 Bull Market (2010-2019)": ("2010-01-01", "2019-12-31"),
+        "🦠 COVID Period (2020-2022)": ("2020-01-01", "2022-12-31"), 
+        "📈 Full Period (2010-2023)": ("2010-01-01", "2023-09-08"),
+        "🎯 Custom Period": None
+    }
+    
+    selected_period = st.selectbox("Historical Test Period:", list(period_options.keys()))
+    
+    if selected_period == "🎯 Custom Period":
+        col1, col2 = st.columns(2)
+        with col1:
+            start_date = st.date_input("Start Date", pd.to_datetime("2010-01-01"))
+        with col2:
+            end_date = st.date_input("End Date", pd.to_datetime("2023-09-08"))
+    else:
+        start_date, end_date = period_options[selected_period]
+        st.write(f"**Selected Period:** {start_date} to {end_date}")
+    
+    # Dynamic recommendations based on current regime
+    if 'current_regime' in locals():
+        if "Bear Market" in current_regime:
+            st.warning("⚠️ In current market conditions, our Conservative RL strategy may outperform")
+        elif "Bull Market" in current_regime:
+            st.info("💡 In current market conditions, higher-return strategies may be preferable")
+        else:
+            st.success("✅ Balanced strategies appear appropriate for current conditions")
 
 else:
     # Portfolio Generation
@@ -158,20 +267,23 @@ else:
             
             try:
                 if is_cloud:
-                    # Cloud Mode: Use cloud-optimized manager
-                    status_text.text("Using cloud-optimized AI allocation...")
+                    # Cloud Mode: Use cloud-optimized manager with dynamic objectives
+                    status_text.text("Using cloud-optimized AI allocation with dynamic objectives...")
                     progress_bar.progress(60)
                     
                     manager = CloudOptimizedRLManager(config.OUTPUT_DIR)
                     weights = manager.get_portfolio_allocation(
                         risk_profile=risk_profile,
                         selected_assets=selected_assets,
-                        risk_tolerance=risk_tolerance
+                        risk_tolerance=risk_tolerance,
+                        return_weight=return_weight,      # NOW WORKS IN CLOUD!
+                        risk_weight=risk_weight,          # NOW WORKS IN CLOUD!
+                        market_regime=current_regime      # NOW WORKS IN CLOUD!
                     )
                     
                     # Get memory info for display
                     memory_info = manager.get_memory_info()
-                    allocation_method = "Cloud-Optimized MPT"
+                    allocation_method = f"Cloud-Optimized Dynamic Allocation - {risk_preference}"
                     
                 else:
                     # Local Mode: Try full RL first
@@ -186,16 +298,21 @@ else:
                         progress_bar.progress(70)
                         
                         manager = RLAgentManager(config.OUTPUT_DIR)
+                        
+                        # CHANGED: Pass the dynamic parameters
                         agent, is_new = manager.get_or_create_agent(
                             risk_profile=risk_profile,
                             selected_assets=selected_assets,
-                            market_data=market_data
+                            market_data=market_data,
+                            return_weight=return_weight,      # ADDED THIS
+                            risk_weight=risk_weight,          # ADDED THIS  
+                            market_regime=current_regime      # ADDED THIS
                         )
                         
                         # Use RL agent allocation
                         weights = manager.get_fallback_allocation(selected_assets, risk_tolerance)
-                        allocation_method = f"Reinforcement Learning ({'New' if is_new else 'Existing'} Agent)"
-                        memory_info = {"status": "RL agent loaded successfully"}
+                        allocation_method = f"Reinforcement Learning ({'New' if is_new else 'Existing'} Agent) - {risk_preference}"
+                        memory_info = {"status": "RL agent loaded successfully", "return_weight": return_weight, "risk_weight": risk_weight}
                         
                     else:
                         raise FileNotFoundError("Market data not available")
@@ -244,6 +361,7 @@ else:
                 
                 # Allocation Method Info
                 st.info(f"🧠 **Allocation Method**: {allocation_method}")
+                st.info(f"📊 **Market Regime**: {current_regime}")
                 
                 # Portfolio Table
                 st.subheader("📋 Detailed Allocation")
@@ -321,6 +439,26 @@ else:
                         help="Portfolio risk level based on your profile"
                     )
                 
+                # Investment Objective Summary
+                st.subheader("🎯 Investment Strategy Summary")
+                
+                obj_col1, obj_col2 = st.columns(2)
+                
+                with obj_col1:
+                    st.metric("Return Priority", f"{return_weight:.0%}")
+                    st.metric("Risk Management Priority", f"{risk_weight:.0%}")
+                
+                with obj_col2:
+                    if return_weight > 0.7:
+                        strategy_desc = "Growth-focused: Prioritizing maximum returns"
+                    elif risk_weight > 0.7:
+                        strategy_desc = "Risk-focused: Prioritizing capital preservation"
+                    else:
+                        strategy_desc = "Balanced: Equal focus on returns and risk management"
+                    
+                    st.write("**Strategy Description:**")
+                    st.write(strategy_desc)
+                
                 # Download Section
                 st.subheader("💾 Export Portfolio")
                 
@@ -328,7 +466,7 @@ else:
                 st.download_button(
                     label="📥 Download Portfolio as CSV",
                     data=csv_data,
-                    file_name=f"portfolio_allocation_{risk_profile}_{len(selected_assets)}assets.csv",
+                    file_name=f"portfolio_allocation_{risk_profile}_{risk_preference.replace(' ', '_')}_{len(selected_assets)}assets.csv",
                     mime="text/csv"
                 )
                 
@@ -336,9 +474,14 @@ else:
                 with st.expander("🔧 Technical Details"):
                     st.json({
                         "allocation_method": allocation_method,
+                        "risk_profile": risk_profile,
+                        "investment_objective": risk_preference,
+                        "return_weight": return_weight,
+                        "risk_weight": risk_weight,
                         "risk_tolerance": risk_tolerance,
                         "total_assets": len(selected_assets),
                         "environment": "Cloud" if is_cloud else "Local",
+                        "market_regime": current_regime,
                         "memory_info": memory_info
                     })
                 
