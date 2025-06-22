@@ -13,7 +13,6 @@ import src.config as config
 from src.models.cloud_optimized_agent import CloudOptimizedRLManager
 from src.models.rl_agent_manager import RLAgentManager
 
-
 try:
     from tabpfn import TabPFNRegressor
     TABPFN_AVAILABLE = True
@@ -86,10 +85,20 @@ def load_rl_managers():
 cloud_manager, rl_manager = load_rl_managers()
 
 if cloud_manager:
-    # Check if risk assessment was done
+    # Check if risk assessment was done - IMPROVED VERSION
     risk_from_profiler = st.session_state.get('recommended_profile', None)
+    risk_score_from_profiler = st.session_state.get('risk_score', None)
+    risk_results = st.session_state.get('risk_assessment_results', None)
     
-    if risk_from_profiler:
+    # Display risk profile information
+    if risk_results:
+        actual_score = risk_results['risk_score']
+        category = risk_results['risk_category']
+        timestamp = risk_results['timestamp'].strftime('%Y-%m-%d %H:%M')
+        st.success(f"✅ **AI Risk Assessment Applied**: {risk_from_profiler} | Score: {actual_score:.2f}/4.0 | Assessed: {timestamp}")
+    elif risk_from_profiler and risk_score_from_profiler:
+        st.success(f"✅ Using risk profile from assessment: **{risk_from_profiler}** (Score: {risk_score_from_profiler:.2f}/4.0)")
+    elif risk_from_profiler:
         st.success(f"✅ Using risk profile from assessment: **{risk_from_profiler}**")
     
     # Portfolio Configuration
@@ -112,10 +121,39 @@ if cloud_manager:
             help="Choose your investment risk tolerance"
         )
         
-        # Risk tolerance display
-        risk_tolerance_map = {'Conservative': 0.3, 'Balanced': 0.5, 'Aggressive': 0.8}
-        risk_tolerance = risk_tolerance_map[risk_profile]
-        st.metric("Risk Tolerance Score", f"{risk_tolerance:.1f}")
+        # IMPROVED: Use actual AI-generated risk score
+        if risk_results and risk_profile == risk_from_profiler:
+            # Use the actual AI score, converted from 1-4 scale to 0-1 scale
+            ai_score = risk_results['risk_score']
+            risk_tolerance = (ai_score - 1) / 3  # Convert 1-4 to 0-1
+            risk_tolerance = max(0.0, min(1.0, risk_tolerance))  # Ensure valid range
+            
+            st.metric(
+                "Risk Tolerance Score", 
+                f"{risk_tolerance:.3f}",
+                f"AI Score: {ai_score:.2f}/4.0"
+            )
+            st.caption(f"🤖 Using precise AI assessment from {risk_results['model_type']}")
+            
+        elif risk_score_from_profiler and risk_profile == risk_from_profiler:
+            # Fallback to session state score
+            risk_tolerance = (risk_score_from_profiler - 1) / 3
+            risk_tolerance = max(0.0, min(1.0, risk_tolerance))
+            
+            st.metric(
+                "Risk Tolerance Score", 
+                f"{risk_tolerance:.3f}",
+                f"AI Score: {risk_score_from_profiler:.2f}/4.0"
+            )
+            st.caption("🤖 Using AI risk assessment")
+            
+        else:
+            # Default mapping when no AI assessment or different profile selected
+            risk_tolerance_map = {'Conservative': 0.3, 'Balanced': 0.5, 'Aggressive': 0.8}
+            risk_tolerance = risk_tolerance_map[risk_profile]
+            
+            st.metric("Risk Tolerance Score", f"{risk_tolerance:.1f}")
+            st.caption("📊 Using default risk mapping")
         
     with config_col2:
         # Investment amount
@@ -220,7 +258,11 @@ if cloud_manager:
             help="Generate AI-optimized portfolio allocation"
         )
     
-    # Portfolio Generation
+    # Initialize session state for portfolio results
+    if 'portfolio_results' not in st.session_state:
+        st.session_state.portfolio_results = None
+    
+    # Portfolio Generation - Store results in session state
     if generate_portfolio and selected_assets:
         st.markdown("---")
         st.header("🤖 AI Portfolio Generation")
@@ -301,184 +343,20 @@ if cloud_manager:
                 status_text.text("✅ Portfolio optimization complete!")
                 progress_bar.progress(100)
                 
+                # STORE RESULTS IN SESSION STATE
+                st.session_state.portfolio_results = {
+                    'allocation_df': allocation_df,
+                    'weights': weights,
+                    'allocation_method': allocation_method,
+                    'risk_profile': risk_profile,
+                    'risk_tolerance': risk_tolerance,
+                    'selected_assets': selected_assets,
+                    'investment_amount': investment_amount,
+                    'market_data': market_data
+                }
+                
                 # Display results
                 st.success(f"✅ Portfolio optimized using {allocation_method}")
-                
-                # Results section
-                st.markdown("---")
-                st.header("📊 Your Optimized Portfolio")
-                
-                # Summary metrics
-                summary_col1, summary_col2, summary_col3, summary_col4 = st.columns(4)
-                
-                with summary_col1:
-                    st.metric("Total Assets", len(selected_assets))
-                with summary_col2:
-                    st.metric("Risk Profile", risk_profile)
-                with summary_col3:
-                    top_holding = allocation_df.iloc[0]
-                    st.metric("Top Holding", f"{top_holding['Asset']}")
-                with summary_col4:
-                    st.metric("Top Weight", f"{top_holding['Weight (%)']:.1f}%")
-                
-                # Allocation table
-                st.subheader("📋 Portfolio Allocation")
-                
-                styled_df = allocation_df.style.format({
-                    'Weight (%)': '{:.2f}%',
-                    'Amount ($)': '${:,.2f}'
-                }).background_gradient(subset=['Weight (%)'], cmap='RdYlGn')
-                
-                st.dataframe(styled_df, use_container_width=True)
-                
-                # Visualizations
-                st.subheader("📊 Portfolio Visualization")
-                
-                viz_col1, viz_col2 = st.columns(2)
-                
-                with viz_col1:
-                    import plotly.express as px
-                    
-                    # Pie chart
-                    fig_pie = px.pie(
-                        allocation_df,
-                        values='Weight (%)',
-                        names='Asset',
-                        title='Portfolio Distribution',
-                        color_discrete_sequence=px.colors.qualitative.Set3
-                    )
-                    fig_pie.update_traces(textposition='inside', textinfo='percent+label')
-                    st.plotly_chart(fig_pie, use_container_width=True)
-                
-                with viz_col2:
-                    # Bar chart
-                    fig_bar = px.bar(
-                        allocation_df,
-                        x='Asset',
-                        y='Weight (%)',
-                        title='Asset Weights',
-                        color='Weight (%)',
-                        color_continuous_scale='Blues'
-                    )
-                    fig_bar.update_layout(xaxis_tickangle=-45)
-                    st.plotly_chart(fig_bar, use_container_width=True)
-                
-                # Portfolio analytics
-                st.subheader("📈 Portfolio Analytics")
-                
-                analytics_col1, analytics_col2, analytics_col3 = st.columns(3)
-                
-                with analytics_col1:
-                    # Diversification
-                    major_holdings = len([w for w in weights if w > 0.05])
-                    st.metric("Major Holdings (>5%)", f"{major_holdings}")
-                    
-                with analytics_col2:
-                    # Concentration
-                    top_5_weight = allocation_df.head(5)['Weight (%)'].sum()
-                    st.metric("Top 5 Concentration", f"{top_5_weight:.1f}%")
-                    
-                with analytics_col3:
-                    # Expected risk level
-                    st.metric("Risk Level", f"{risk_tolerance * 100:.0f}/100")
-                
-                # Market data preview
-                if not market_data.empty:
-                    st.subheader("📊 Market Data Preview")
-                    
-                    # Show recent price movements
-                    recent_data = market_data.tail(30)  # Last 30 days
-                    
-                    if len(recent_data) > 1:
-                        # Calculate daily returns
-                        returns = recent_data.pct_change().dropna()
-                        
-                        # Portfolio performance simulation
-                        portfolio_returns = (returns * weights).sum(axis=1)
-                        cumulative_returns = (1 + portfolio_returns).cumprod()
-                        
-                        # Plot portfolio performance
-                        import plotly.graph_objects as go
-                        
-                        fig_perf = go.Figure()
-                        fig_perf.add_trace(go.Scatter(
-                            x=cumulative_returns.index,
-                            y=cumulative_returns.values,
-                            mode='lines',
-                            name='Portfolio Performance',
-                            line=dict(color='blue', width=2)
-                        ))
-                        
-                        fig_perf.update_layout(
-                            title='Simulated Portfolio Performance (Last 30 Days)',
-                            xaxis_title='Date',
-                            yaxis_title='Cumulative Return',
-                            hovermode='x'
-                        )
-                        
-                        st.plotly_chart(fig_perf, use_container_width=True)
-                        
-                        # Performance metrics
-                        perf_col1, perf_col2, perf_col3 = st.columns(3)
-                        
-                        with perf_col1:
-                            total_return = (cumulative_returns.iloc[-1] - 1) * 100
-                            st.metric("30-Day Return", f"{total_return:.2f}%")
-                            
-                        with perf_col2:
-                            volatility = portfolio_returns.std() * np.sqrt(252) * 100  # Annualized
-                            st.metric("Annualized Volatility", f"{volatility:.2f}%")
-                            
-                        with perf_col3:
-                            if volatility > 0:
-                                sharpe = (portfolio_returns.mean() * 252) / (portfolio_returns.std() * np.sqrt(252))
-                                st.metric("Sharpe Ratio", f"{sharpe:.2f}")
-                            else:
-                                st.metric("Sharpe Ratio", "N/A")
-                
-                # Export functionality
-                st.subheader("💾 Export Portfolio")
-                
-                export_col1, export_col2 = st.columns(2)
-                
-                with export_col1:
-                    csv_data = allocation_df.to_csv(index=False)
-                    st.download_button(
-                        label="📥 Download as CSV",
-                        data=csv_data,
-                        file_name=f"portfolio_{risk_profile}_{len(selected_assets)}assets.csv",
-                        mime="text/csv"
-                    )
-                
-                with export_col2:
-                    # Portfolio summary for copying
-                    summary_text = f"""Portfolio Summary:
-Risk Profile: {risk_profile}
-Total Assets: {len(selected_assets)}
-Investment Amount: ${investment_amount:,}
-Allocation Method: {allocation_method}
-
-Asset Allocation:
-{allocation_df.to_string(index=False)}"""
-                    
-                    st.download_button(
-                        label="📄 Download Summary",
-                        data=summary_text,
-                        file_name=f"portfolio_summary_{risk_profile}.txt",
-                        mime="text/plain"
-                    )
-                
-                # Technical details
-                with st.expander("🔧 Technical Details"):
-                    st.json({
-                        "allocation_method": allocation_method,
-                        "risk_profile": risk_profile,
-                        "risk_tolerance": risk_tolerance,
-                        "total_assets": len(selected_assets),
-                        "environment": "Cloud" if is_cloud else "Local",
-                        "selected_assets": selected_assets,
-                        "investment_amount": investment_amount
-                    })
                 
             except Exception as e:
                 st.error(f"❌ Error generating portfolio: {str(e)}")
@@ -487,6 +365,201 @@ Asset Allocation:
                 # Show error details for debugging
                 with st.expander("🐛 Error Details"):
                     st.code(str(e))
+    
+    # Display Portfolio Results (persistent across button clicks)
+    if st.session_state.portfolio_results is not None:
+        results = st.session_state.portfolio_results
+        allocation_df = results['allocation_df']
+        weights = results['weights']
+        allocation_method = results['allocation_method']
+        risk_profile = results['risk_profile']
+        risk_tolerance = results['risk_tolerance']
+        selected_assets = results['selected_assets']
+        investment_amount = results['investment_amount']
+        market_data = results['market_data']
+        
+        # Results section
+        st.markdown("---")
+        st.header("📊 Your Optimized Portfolio")
+        
+        # Add a "Clear Results" button
+        clear_col1, clear_col2, clear_col3 = st.columns([1, 1, 1])
+        with clear_col2:
+            if st.button("🗑️ Clear Results", help="Clear portfolio results and start over"):
+                st.session_state.portfolio_results = None
+                st.rerun()
+        
+        # Summary metrics
+        summary_col1, summary_col2, summary_col3, summary_col4 = st.columns(4)
+        
+        with summary_col1:
+            st.metric("Total Assets", len(selected_assets))
+        with summary_col2:
+            st.metric("Risk Profile", risk_profile)
+        with summary_col3:
+            top_holding = allocation_df.iloc[0]
+            st.metric("Top Holding", f"{top_holding['Asset']}")
+        with summary_col4:
+            st.metric("Top Weight", f"{top_holding['Weight (%)']:.1f}%")
+        
+        # Allocation table
+        st.subheader("📋 Portfolio Allocation")
+        
+        styled_df = allocation_df.style.format({
+            'Weight (%)': '{:.2f}%',
+            'Amount ($)': '${:,.2f}'
+        }).background_gradient(subset=['Weight (%)'], cmap='RdYlGn')
+        
+        st.dataframe(styled_df, use_container_width=True)
+        
+        # Visualizations
+        st.subheader("📊 Portfolio Visualization")
+        
+        viz_col1, viz_col2 = st.columns(2)
+        
+        with viz_col1:
+            import plotly.express as px
+            
+            # Pie chart
+            fig_pie = px.pie(
+                allocation_df,
+                values='Weight (%)',
+                names='Asset',
+                title='Portfolio Distribution',
+                color_discrete_sequence=px.colors.qualitative.Set3
+            )
+            fig_pie.update_traces(textposition='inside', textinfo='percent+label')
+            st.plotly_chart(fig_pie, use_container_width=True)
+        
+        with viz_col2:
+            # Bar chart
+            fig_bar = px.bar(
+                allocation_df,
+                x='Asset',
+                y='Weight (%)',
+                title='Asset Weights',
+                color='Weight (%)',
+                color_continuous_scale='Blues'
+            )
+            fig_bar.update_layout(xaxis_tickangle=-45)
+            st.plotly_chart(fig_bar, use_container_width=True)
+        
+        # Portfolio analytics
+        st.subheader("📈 Portfolio Analytics")
+        
+        analytics_col1, analytics_col2, analytics_col3 = st.columns(3)
+        
+        with analytics_col1:
+            # Diversification
+            major_holdings = len([w for w in weights if w > 0.05])
+            st.metric("Major Holdings (>5%)", f"{major_holdings}")
+            
+        with analytics_col2:
+            # Concentration
+            top_5_weight = allocation_df.head(5)['Weight (%)'].sum()
+            st.metric("Top 5 Concentration", f"{top_5_weight:.1f}%")
+            
+        with analytics_col3:
+            # Expected risk level
+            st.metric("Risk Level", f"{risk_tolerance * 100:.0f}/100")
+        
+        # Market data preview
+        if not market_data.empty:
+            st.subheader("📊 Market Data Preview")
+            
+            # Show recent price movements
+            recent_data = market_data.tail(30)  # Last 30 days
+            
+            if len(recent_data) > 1:
+                # Calculate daily returns
+                returns = recent_data.pct_change().dropna()
+                
+                # Portfolio performance simulation
+                portfolio_returns = (returns * weights).sum(axis=1)
+                cumulative_returns = (1 + portfolio_returns).cumprod()
+                
+                # Plot portfolio performance
+                import plotly.graph_objects as go
+                
+                fig_perf = go.Figure()
+                fig_perf.add_trace(go.Scatter(
+                    x=cumulative_returns.index,
+                    y=cumulative_returns.values,
+                    mode='lines',
+                    name='Portfolio Performance',
+                    line=dict(color='blue', width=2)
+                ))
+                
+                fig_perf.update_layout(
+                    title='Simulated Portfolio Performance (Last 30 Days)',
+                    xaxis_title='Date',
+                    yaxis_title='Cumulative Return',
+                    hovermode='x'
+                )
+                
+                st.plotly_chart(fig_perf, use_container_width=True)
+                
+                # Performance metrics
+                perf_col1, perf_col2, perf_col3 = st.columns(3)
+                
+                with perf_col1:
+                    total_return = (cumulative_returns.iloc[-1] - 1) * 100
+                    st.metric("30-Day Return", f"{total_return:.2f}%")
+                    
+                with perf_col2:
+                    volatility = portfolio_returns.std() * np.sqrt(252) * 100  # Annualized
+                    st.metric("Annualized Volatility", f"{volatility:.2f}%")
+                    
+                with perf_col3:
+                    if volatility > 0:
+                        sharpe = (portfolio_returns.mean() * 252) / (portfolio_returns.std() * np.sqrt(252))
+                        st.metric("Sharpe Ratio", f"{sharpe:.2f}")
+                    else:
+                        st.metric("Sharpe Ratio", "N/A")
+        
+        # Export functionality
+        st.subheader("💾 Export Portfolio")
+        
+        export_col1, export_col2 = st.columns(2)
+        
+        with export_col1:
+            csv_data = allocation_df.to_csv(index=False)
+            st.download_button(
+                label="📥 Download as CSV",
+                data=csv_data,
+                file_name=f"portfolio_{risk_profile}_{len(selected_assets)}assets.csv",
+                mime="text/csv"
+            )
+        
+        with export_col2:
+            # Portfolio summary for copying
+            summary_text = f"""Portfolio Summary:
+Risk Profile: {risk_profile}
+Total Assets: {len(selected_assets)}
+Investment Amount: ${investment_amount:,}
+Allocation Method: {allocation_method}
+
+Asset Allocation:
+{allocation_df.to_string(index=False)}"""
+            
+            st.download_button(
+                label="📄 Download Summary",
+                data=summary_text,
+                file_name=f"portfolio_summary_{risk_profile}.txt",
+                mime="text/plain"
+            )
+        
+        # Technical details
+        with st.expander("🔧 Technical Details"):
+            st.json({
+                "allocation_method": allocation_method,
+                "risk_profile": risk_profile,
+                "risk_tolerance": risk_tolerance,
+                "total_assets": len(selected_assets),
+                "environment": "Cloud" if is_cloud else "Local",
+                "selected_assets": selected_assets,
+                "investment_amount": investment_amount
+            })
     
     # Tips and guidance
     st.markdown("---")
