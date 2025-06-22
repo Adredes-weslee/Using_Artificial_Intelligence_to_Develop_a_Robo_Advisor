@@ -41,13 +41,19 @@ class RLAgentManager:
         logger.info(f"Initialized RLAgentManager with models directory: {models_dir}")
     
     def get_or_create_agent(self, risk_profile: str, selected_assets: List[str], 
-                          market_data: pd.DataFrame) -> Tuple[Agent, bool]:
-        """Get existing agent or create/train new one for given assets.
+                          market_data: pd.DataFrame,
+                          return_weight: float = 0.5,    # ADDED THIS
+                          risk_weight: float = 0.5,      # ADDED THIS
+                          market_regime: str = "Stable") -> Tuple[Agent, bool]:  # ADDED THIS
+        """Get existing agent or create/train new one with dynamic objectives.
         
         Args:
             risk_profile: Conservative, Balanced, or Aggressive
             selected_assets: List of asset tickers
             market_data: Historical price data
+            return_weight: Weight for return component in reward (0.0 to 1.0)
+            risk_weight: Weight for risk component in reward (0.0 to 1.0)
+            market_regime: Current market regime for dynamic adjustments
             
         Returns:
             Tuple of (agent, is_newly_trained)
@@ -57,29 +63,34 @@ class RLAgentManager:
                            f"Available: {list(RL_MODEL_CONFIGS.keys())}")
         
         asset_key = self._get_asset_key(selected_assets)
-        agent_key = f"{risk_profile}_{asset_key}"
+        # CHANGED: Include objective in agent key to distinguish different training objectives
+        objective_key = f"ret{return_weight:.1f}_risk{risk_weight:.1f}_{market_regime.split()[0]}"
+        agent_key = f"{risk_profile}_{asset_key}_{objective_key}"
         
         logger.info(f"Requesting agent for {risk_profile} profile with {len(selected_assets)} assets")
+        logger.info(f"Objective: {return_weight:.0%} return, {risk_weight:.0%} risk, regime: {market_regime}")
         
         # Check if we already have this exact configuration
         if agent_key in self.loaded_agents:
             logger.info(f"Using cached agent: {agent_key}")
             return self.loaded_agents[agent_key], False
         
-        # Check for compatible existing model
+        # Check for compatible existing model (ignoring objective for transfer learning)
         compatible_agent = self._find_compatible_agent(risk_profile, selected_assets)
         
         if compatible_agent:
             # Use transfer learning
             logger.info("Found compatible agent, applying transfer learning...")
-            new_agent = self._adapt_agent(compatible_agent, selected_assets, market_data, risk_profile)
+            new_agent = self._adapt_agent(compatible_agent, selected_assets, market_data, 
+                                        risk_profile, return_weight, risk_weight, market_regime)
             self.loaded_agents[agent_key] = new_agent
             self.asset_mappings[agent_key] = selected_assets
             return new_agent, False
         else:
             # Train new agent from scratch
             logger.info("No compatible agent found, training new agent...")
-            new_agent = self._train_new_agent(risk_profile, selected_assets, market_data)
+            new_agent = self._train_new_agent(risk_profile, selected_assets, market_data,
+                                            return_weight, risk_weight, market_regime)
             self.loaded_agents[agent_key] = new_agent
             self.asset_mappings[agent_key] = selected_assets
             return new_agent, True
@@ -114,7 +125,8 @@ class RLAgentManager:
         return best_agent
     
     def _adapt_agent(self, base_agent: Agent, new_assets: List[str], 
-                    market_data: pd.DataFrame, risk_profile: str) -> Agent:
+                    market_data: pd.DataFrame, risk_profile: str,
+                    return_weight: float, risk_weight: float, market_regime: str) -> Agent:  # ADDED PARAMETERS
         """Adapt existing agent to new asset set using transfer learning."""
         try:
             # Create new agent with same architecture but different asset size
@@ -132,21 +144,25 @@ class RLAgentManager:
             config = RL_MODEL_CONFIGS[risk_profile]
             fine_tune_data = market_data[new_assets].copy()
             
-            # Short fine-tuning session
+            # Short fine-tuning session with dynamic objectives
             logger.info(f"Fine-tuning agent for {TRANSFER_LEARNING_CONFIG['fine_tune_epochs']} episodes...")
             fine_tuned_agent, _ = train_rl_agent(
                 selected_data=fine_tune_data,
                 window_size=50,
                 episode_count=TRANSFER_LEARNING_CONFIG['fine_tune_epochs'],
                 batch_size=16,
-                rebalance_period=config['rebalance_frequency']
+                rebalance_period=config['rebalance_frequency'],
+                return_weight=return_weight,    # ADDED THIS
+                risk_weight=risk_weight,        # ADDED THIS
+                market_regime=market_regime     # ADDED THIS
             )
             
             return fine_tuned_agent
             
         except Exception as e:
             logger.error(f"Transfer learning failed: {e}, training from scratch")
-            return self._train_new_agent(risk_profile, new_assets, market_data)
+            return self._train_new_agent(risk_profile, new_assets, market_data,
+                                       return_weight, risk_weight, market_regime)
     
     def _can_map_weights(self, base_agent: Agent, new_agent: Agent) -> bool:
         """Check if we can map weights between agents."""
@@ -175,23 +191,29 @@ class RLAgentManager:
             logger.warning(f"Weight transfer failed: {e}, using random initialization")
     
     def _train_new_agent(self, risk_profile: str, selected_assets: List[str], 
-                        market_data: pd.DataFrame) -> Agent:
-        """Train completely new agent for given assets."""
+                        market_data: pd.DataFrame,
+                        return_weight: float, risk_weight: float, market_regime: str) -> Agent:  # ADDED PARAMETERS
+        """Train completely new agent for given assets with dynamic objectives."""
         config = RL_MODEL_CONFIGS[risk_profile]
         training_data = market_data[selected_assets].copy()
         
         logger.info(f"Training new {risk_profile} agent for {len(selected_assets)} assets...")
+        logger.info(f"Dynamic objective: {return_weight:.0%} return, {risk_weight:.0%} risk")
         
         agent, _ = train_rl_agent(
             selected_data=training_data,
             window_size=50,
             episode_count=50,  # Full training
             batch_size=32,
-            rebalance_period=config['rebalance_frequency']
+            rebalance_period=config['rebalance_frequency'],
+            return_weight=return_weight,    # ADDED THIS
+            risk_weight=risk_weight,        # ADDED THIS
+            market_regime=market_regime     # ADDED THIS
         )
         
-        # Save model with asset-specific name
-        model_filename = f"{risk_profile}_{self._get_asset_key(selected_assets)}.pth"
+        # Save model with asset-specific name and objective
+        objective_suffix = f"ret{return_weight:.1f}_risk{risk_weight:.1f}"
+        model_filename = f"{risk_profile}_{self._get_asset_key(selected_assets)}_{objective_suffix}.pth"
         model_path = self.models_dir / model_filename
         agent.save_model(model_path)  # Use the agent's PyTorch save method
         logger.info(f"Saved new agent model: {model_path}")
@@ -249,7 +271,9 @@ class RLAgentManager:
 
 
 def create_agent_for_custom_portfolio(risk_profile: str, selected_assets: List[str], 
-                                    market_data: pd.DataFrame, models_dir: Path) -> Agent:
+                                    market_data: pd.DataFrame, models_dir: Path,
+                                    return_weight: float = 0.5, risk_weight: float = 0.5,  # ADDED THESE
+                                    market_regime: str = "Stable") -> Agent:  # ADDED THIS
     """Convenience function to get appropriate agent for custom asset selection.
     
     Args:
@@ -257,17 +281,23 @@ def create_agent_for_custom_portfolio(risk_profile: str, selected_assets: List[s
         selected_assets: List of asset tickers
         market_data: Historical price data
         models_dir: Directory for model storage
+        return_weight: Weight for return component in reward (0.0 to 1.0)
+        risk_weight: Weight for risk component in reward (0.0 to 1.0)
+        market_regime: Current market regime for dynamic adjustments
         
     Returns:
         Trained/adapted RL agent for the specified configuration
     """
     manager = RLAgentManager(models_dir)
-    agent, is_new = manager.get_or_create_agent(risk_profile, selected_assets, market_data)
+    agent, is_new = manager.get_or_create_agent(risk_profile, selected_assets, market_data,
+                                              return_weight, risk_weight, market_regime)
     
     if is_new:
         print(f"✓ Trained new {risk_profile} RL agent for {len(selected_assets)} assets")
+        print(f"  Objective: {return_weight:.0%} return, {risk_weight:.0%} risk")
     else:
         print(f"✓ Using existing/adapted {risk_profile} RL agent")
+        print(f"  Objective: {return_weight:.0%} return, {risk_weight:.0%} risk")
     
     return agent
 
