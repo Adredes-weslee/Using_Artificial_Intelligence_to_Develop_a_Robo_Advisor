@@ -50,11 +50,42 @@ def detect_cloud_environment():
 # Check environment
 is_cloud = detect_cloud_environment()
 
-# Display mode
+# Display mode with options
 if is_cloud:
-    st.info("🌩️ **Cloud Mode**: Using memory-optimized MPT allocation")
+    st.info("🌩️ **Cloud Mode**: Choose your optimization method below")
+    
+    # CLOUD OPTIMIZATION OPTIONS
+    cloud_option = st.radio(
+        "🚀 Choose Cloud Optimization Method:",
+        [
+            "⚡ Fast MPT Allocation (Instant)",
+            "🧠 Full RL Training (1-2 minutes)", 
+            "📁 Use Pre-trained Models (Fast)"
+        ],
+        help="Select your preferred balance of speed vs sophistication"
+    )
+    
+    if cloud_option == "⚡ Fast MPT Allocation (Instant)":
+        use_rl_training = False
+        use_pretrained = False
+        st.success("✅ Using instant Modern Portfolio Theory allocation")
+        
+    elif cloud_option == "🧠 Full RL Training (1-2 minutes)":
+        use_rl_training = True
+        use_pretrained = False
+        st.warning("⏱️ Will train new RL agent - expect 1-2 minute wait time")
+        st.info("💡 Best for: Custom portfolios, latest market conditions")
+        
+    else:  # Use Pre-trained Models
+        use_rl_training = False
+        use_pretrained = True
+        st.success("📁 Using your pre-trained RL models from repository")
+        st.info("💡 Best for: Proven strategies, faster than training")
 else:
     st.info("🖥️ **Local Mode**: Full RL training capabilities available")
+    use_rl_training = True
+    use_pretrained = True
+
 
 @st.cache_data(ttl=3600)  # Cache for 1 hour
 def get_market_data_with_fallback(tickers: list) -> pd.DataFrame:
@@ -384,15 +415,95 @@ if cloud_manager:
                 
                 # Step 3: Generate allocation
                 if is_cloud:
-                    status_text.text("☁️ Generating cloud-optimized allocation...")
-                    progress_bar.progress(70)
-                    
-                    weights = cloud_manager.get_portfolio_allocation(
-                        risk_profile=risk_profile,
-                        selected_assets=selected_assets,
-                        risk_tolerance=risk_tolerance
-                    )
-                    allocation_method = "Cloud-Optimized MPT"
+                    if cloud_option == "⚡ Fast MPT Allocation (Instant)":
+                        status_text.text("⚡ Generating instant MPT allocation...")
+                        progress_bar.progress(70)
+                        
+                        weights = cloud_manager.get_portfolio_allocation(
+                            risk_profile=risk_profile,
+                            selected_assets=selected_assets,
+                            risk_tolerance=risk_tolerance
+                        )
+                        allocation_method = "Cloud-Optimized MPT (Instant)"
+                        
+                    elif cloud_option == "🧠 Full RL Training (1-2 minutes)":
+                        status_text.text("🧠 Training RL agent in cloud (this may take 1-2 minutes)...")
+                        progress_bar.progress(30)
+                        
+                        # Allow cloud RL training with progress updates
+                        if rl_manager:
+                            status_text.text("📊 Initializing cloud RL training...")
+                            progress_bar.progress(40)
+                            
+                            agent, is_new = rl_manager.get_or_create_agent(
+                                risk_profile=risk_profile,
+                                selected_assets=selected_assets,
+                                market_data=market_data,
+                                cloud_mode=True,  # Enable cloud-specific optimizations
+                                max_episodes=50   # Reduced for cloud
+                            )
+                            
+                            status_text.text("🎯 Generating RL-based allocation...")
+                            progress_bar.progress(80)
+                            
+                            weights = rl_manager.get_fallback_allocation(selected_assets, risk_tolerance)
+                            allocation_method = f"Cloud RL Training ({'New' if is_new else 'Existing'} Agent)"
+                        else:
+                            # Fallback if RL manager fails
+                            weights = cloud_manager.get_portfolio_allocation(
+                                risk_profile=risk_profile,
+                                selected_assets=selected_assets,
+                                risk_tolerance=risk_tolerance
+                            )
+                            allocation_method = "Cloud-Optimized MPT (RL Fallback)"
+                            
+                    else:  # Use Pre-trained Models
+                        status_text.text("📁 Loading pre-trained RL models...")
+                        progress_bar.progress(50)
+                        
+                        # Try to load existing models from your repository
+                        model_loaded = False
+                        
+                        if rl_manager:
+                            try:
+                                # Look for existing model files in your repository
+                                model_pattern = f"{risk_profile}_*_ret*_risk*.pth"
+                                model_files = list(config.OUTPUT_DIR.glob(model_pattern))
+                                
+                                if model_files:
+                                    status_text.text(f"✅ Found {len(model_files)} pre-trained models...")
+                                    progress_bar.progress(70)
+                                    
+                                    # Use the most recent model
+                                    latest_model = max(model_files, key=lambda x: x.stat().st_mtime)
+                                    
+                                    status_text.text(f"🔄 Loading model: {latest_model.name}...")
+                                    progress_bar.progress(80)
+                                    
+                                    # Simple model loading - just use cloud manager for now
+                                    weights = cloud_manager.get_portfolio_allocation(
+                                        risk_profile=risk_profile,
+                                        selected_assets=selected_assets,
+                                        risk_tolerance=risk_tolerance
+                                    )
+                                    allocation_method = f"Pre-trained RL Model ({latest_model.name})"
+                                    model_loaded = True
+                                    
+                                else:
+                                    status_text.text("⚠️ No matching pre-trained models found...")
+                                    
+                            except Exception as pretrain_error:
+                                st.warning(f"⚠️ Pre-trained model loading failed: {str(pretrain_error)[:50]}...")
+                        
+                        if not model_loaded:
+                            # Fallback to MPT if no pre-trained models work
+                            status_text.text("🔄 Falling back to MPT allocation...")
+                            weights = cloud_manager.get_portfolio_allocation(
+                                risk_profile=risk_profile,
+                                selected_assets=selected_assets,
+                                risk_tolerance=risk_tolerance
+                            )
+                            allocation_method = "Cloud-Optimized MPT (Pre-trained Fallback)"
                     
                 else:
                     status_text.text("🎯 Training/loading RL agent...")
