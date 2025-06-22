@@ -37,54 +37,79 @@ class CloudOptimizedRLManager:
         logger.info(f"Initialized CloudOptimizedRLManager - Cloud mode: {self.is_cloud}")
         
     def get_portfolio_allocation(self, risk_profile: str, selected_assets: List[str], 
-                               risk_tolerance: float) -> np.ndarray:
-        """Get portfolio allocation with cloud optimization.
+                               risk_tolerance: float,
+                               return_weight: float = 0.5,    # ADDED THIS
+                               risk_weight: float = 0.5,      # ADDED THIS
+                               market_regime: str = "Stable") -> np.ndarray:  # ADDED THIS
+        """Get portfolio allocation with cloud optimization and dynamic objectives.
         
         Args:
             risk_profile: Conservative, Balanced, or Aggressive
             selected_assets: List of asset tickers
             risk_tolerance: Risk tolerance score (0.0 to 1.0)
+            return_weight: Weight for return component (0.0 to 1.0)
+            risk_weight: Weight for risk component (0.0 to 1.0)
+            market_regime: Current market regime
             
         Returns:
             Portfolio weights as numpy array
         """
         
         if self.is_cloud or len(selected_assets) > self.max_assets_for_rl:
-            # Use MPT fallback for cloud or large portfolios
-            logger.info(f"Using MPT fallback - Cloud: {self.is_cloud}, Assets: {len(selected_assets)}")
-            return self._get_mpt_allocation(selected_assets, risk_tolerance)
+            # Use enhanced MPT with dynamic objectives for cloud
+            logger.info(f"Using enhanced MPT with dynamic objectives - Cloud: {self.is_cloud}, Assets: {len(selected_assets)}")
+            return self._get_dynamic_mpt_allocation(selected_assets, risk_tolerance, 
+                                                  return_weight, risk_weight, market_regime, risk_profile)
         else:
             # Try RL agent for local development
             try:
                 return self._get_rl_allocation(risk_profile, selected_assets, risk_tolerance)
             except (MemoryError, ImportError, FileNotFoundError) as e:
-                logger.warning(f"RL allocation failed: {e}, falling back to MPT")
-                return self._get_mpt_allocation(selected_assets, risk_tolerance)
+                logger.warning(f"RL allocation failed: {e}, falling back to dynamic MPT")
+                return self._get_dynamic_mpt_allocation(selected_assets, risk_tolerance,
+                                                      return_weight, risk_weight, market_regime, risk_profile)
     
-    def _get_mpt_allocation(self, assets: List[str], risk_tolerance: float) -> np.ndarray:
-        """Memory-efficient MPT-inspired allocation.
+    def _get_dynamic_mpt_allocation(self, assets: List[str], risk_tolerance: float,
+                                  return_weight: float, risk_weight: float,
+                                  market_regime: str, risk_profile: str) -> np.ndarray:
+        """Enhanced MPT allocation that simulates dynamic RL behavior.
         
-        Uses risk-adjusted equal weights with sector considerations.
-        This is much more sophisticated than simple equal weights.
+        This method creates meaningful differences between investment objectives
+        without requiring actual RL training.
         """
         n_assets = len(assets)
         if n_assets == 0:
             return np.array([])
         
-        # Base equal weights
+        # Base allocation using risk-adjusted equal weights
+        base_weights = self._get_base_allocation(assets, risk_tolerance)
+        
+        # Apply objective-based adjustments (simulating RL behavior)
+        adjusted_weights = self._apply_objective_adjustment(
+            base_weights, return_weight, risk_weight, market_regime, risk_profile, assets
+        )
+        
+        logger.info(f"Generated dynamic MPT allocation: {return_weight:.0%} return, {risk_weight:.0%} risk")
+        return adjusted_weights
+    
+    def _get_base_allocation(self, assets: List[str], risk_tolerance: float) -> np.ndarray:
+        """Generate base allocation using sophisticated equal-weight approach."""
+        n_assets = len(assets)
+        
+        # Start with equal weights
         weights = np.ones(n_assets) / n_assets
         
-        # Risk tolerance adjustments
+        # Risk tolerance adjustments to base allocation
         if risk_tolerance < 0.3:  # Conservative
             # More diversified (flatter distribution)
             weights = weights * 0.85 + 0.15 / n_assets
             
         elif risk_tolerance > 0.7:  # Aggressive
-            # Allow concentration on growth assets (simplified)
+            # Allow some base concentration on growth assets
             growth_assets = self._identify_growth_assets(assets)
             for i, asset in enumerate(assets):
                 if asset in growth_assets:
-                    weights[i] *= 1.3
+                    weights[i] *= 1.2
             weights = weights / weights.sum()  # Renormalize
             
         else:  # Balanced
@@ -92,11 +117,119 @@ class CloudOptimizedRLManager:
             stable_assets = self._identify_stable_assets(assets)
             for i, asset in enumerate(assets):
                 if asset in stable_assets:
-                    weights[i] *= 1.1
+                    weights[i] *= 1.05
             weights = weights / weights.sum()
         
-        logger.info(f"Generated MPT allocation for {n_assets} assets with risk tolerance {risk_tolerance}")
         return weights
+    
+    def _apply_objective_adjustment(self, base_weights: np.ndarray, 
+                                  return_weight: float, risk_weight: float,
+                                  market_regime: str, risk_profile: str, 
+                                  assets: List[str]) -> np.ndarray:
+        """Apply dynamic objective adjustments to simulate different RL behaviors."""
+        
+        weights = base_weights.copy()
+        
+        # MAJOR OBJECTIVE-BASED ADJUSTMENTS (simulating different RL training)
+        if return_weight > 0.6:  # Growth-focused (🚀 Maximize Returns)
+            logger.info("Applying growth-focused adjustments (simulating aggressive RL)")
+            
+            # 1. Increase concentration in top growth assets
+            weights = self._increase_growth_concentration(weights, assets, factor=0.3)
+            
+            # 2. Boost technology and growth sectors
+            weights = self._boost_growth_sectors(weights, assets, factor=0.2)
+            
+        elif risk_weight > 0.6:  # Risk-focused (🛡️ Protect Capital)
+            logger.info("Applying risk-focused adjustments (simulating conservative RL)")
+            
+            # 1. Increase diversification
+            weights = self._increase_diversification(weights, factor=0.25)
+            
+            # 2. Boost defensive sectors
+            weights = self._boost_defensive_sectors(weights, assets, factor=0.2)
+            
+        # Academic/Balanced (⚖️ Balance Risk & Return) - minimal adjustments
+        
+        # MARKET REGIME ADJUSTMENTS
+        if "Bear Market" in market_regime or "High Volatility" in market_regime:
+            # More conservative regardless of objective
+            weights = self._increase_diversification(weights, factor=0.1)
+            weights = self._boost_defensive_sectors(weights, assets, factor=0.1)
+            
+        elif "Bull Market" in market_regime or "Low Volatility" in market_regime:
+            # Allow more concentration and growth focus
+            weights = self._increase_growth_concentration(weights, assets, factor=0.1)
+        
+        # RISK PROFILE MULTIPLIERS
+        risk_multipliers = {
+            'Conservative': 0.8,  # Dampen aggressive moves
+            'Balanced': 1.0,      # No change
+            'Aggressive': 1.2     # Amplify moves
+        }
+        
+        multiplier = risk_multipliers.get(risk_profile, 1.0)
+        if multiplier != 1.0:
+            # Apply multiplier to deviations from equal weight
+            equal_weight = 1.0 / len(weights)
+            deviations = weights - equal_weight
+            weights = equal_weight + (deviations * multiplier)
+            weights = np.maximum(weights, 0.01)  # Ensure positive weights
+            weights = weights / weights.sum()  # Renormalize
+        
+        return weights
+    
+    def _increase_growth_concentration(self, weights: np.ndarray, assets: List[str], 
+                                     factor: float) -> np.ndarray:
+        """Increase concentration in growth assets (simulate aggressive RL behavior)."""
+        growth_assets = self._identify_growth_assets(assets)
+        adjusted_weights = weights.copy()
+        
+        # Boost growth assets
+        for i, asset in enumerate(assets):
+            if asset in growth_assets:
+                boost = weights[i] * factor
+                adjusted_weights[i] += boost
+        
+        # Also boost top holdings regardless of sector
+        sorted_indices = np.argsort(weights)[::-1]
+        for i in range(min(3, len(weights))):
+            idx = sorted_indices[i]
+            boost = weights[idx] * (factor * 0.5)  # Smaller boost for top holdings
+            adjusted_weights[idx] += boost
+        
+        return adjusted_weights / adjusted_weights.sum()
+    
+    def _increase_diversification(self, weights: np.ndarray, factor: float) -> np.ndarray:
+        """Increase diversification (simulate conservative RL behavior)."""
+        # Move toward equal weighting
+        equal_weight = 1.0 / len(weights)
+        adjusted_weights = weights * (1 - factor) + equal_weight * factor
+        return adjusted_weights / adjusted_weights.sum()
+    
+    def _boost_growth_sectors(self, weights: np.ndarray, assets: List[str], 
+                             factor: float) -> np.ndarray:
+        """Boost growth-oriented sectors."""
+        growth_assets = self._identify_growth_assets(assets)
+        adjusted_weights = weights.copy()
+        
+        for i, asset in enumerate(assets):
+            if asset in growth_assets:
+                adjusted_weights[i] *= (1 + factor)
+        
+        return adjusted_weights / adjusted_weights.sum()
+    
+    def _boost_defensive_sectors(self, weights: np.ndarray, assets: List[str], 
+                               factor: float) -> np.ndarray:
+        """Boost defensive sectors."""
+        defensive_assets = self._identify_stable_assets(assets)
+        adjusted_weights = weights.copy()
+        
+        for i, asset in enumerate(assets):
+            if asset in defensive_assets:
+                adjusted_weights[i] *= (1 + factor)
+        
+        return adjusted_weights / adjusted_weights.sum()
     
     def _get_rl_allocation(self, risk_profile: str, selected_assets: List[str], 
                           risk_tolerance: float) -> np.ndarray:
@@ -159,19 +292,41 @@ class CloudOptimizedRLManager:
     
     def _identify_growth_assets(self, assets: List[str]) -> List[str]:
         """Identify growth-oriented assets from the list."""
-        # Common growth stocks (tech, biotech, etc.)
+        # Comprehensive growth stocks (tech, biotech, etc.)
         growth_indicators = [
-            'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'META', 'NVDA', 
-            'NFLX', 'CRM', 'ADBE', 'INTC', 'AMD'
+            # Technology
+            'AAPL', 'MSFT', 'GOOGL', 'GOOG', 'AMZN', 'META', 'TSLA', 'NVDA', 
+            'NFLX', 'CRM', 'ADBE', 'INTC', 'AMD', 'ORCL', 'CSCO', 'AVGO',
+            
+            # Communication Services  
+            'GOOG', 'META', 'NFLX', 'DIS', 'CMCSA', 'VZ', 'T',
+            
+            # Consumer Discretionary
+            'AMZN', 'TSLA', 'HD', 'MCD', 'NKE', 'SBUX', 'TGT',
+            
+            # Growth Healthcare/Biotech
+            'UNH', 'JNJ', 'PFE', 'ABT', 'TMO', 'ABBV', 'LLY', 'BMY'
         ]
         return [asset for asset in assets if asset in growth_indicators]
     
     def _identify_stable_assets(self, assets: List[str]) -> List[str]:
         """Identify stable, defensive assets from the list."""
-        # Common defensive stocks (utilities, consumer staples, healthcare)
+        # Comprehensive defensive stocks (utilities, consumer staples, dividend stocks)
         stable_indicators = [
-            'JNJ', 'PG', 'KO', 'PEP', 'WMT', 'JPM', 'BAC', 'V', 'MA',
-            'UNH', 'HD', 'VZ', 'T', 'DIS'
+            # Healthcare (large, stable)
+            'JNJ', 'UNH', 'PFE', 'ABT', 'MRK', 'ABBV', 'BMY', 'LLY',
+            
+            # Consumer Staples
+            'PG', 'KO', 'PEP', 'WMT', 'COST', 'CL', 'KMB', 'GIS', 'K',
+            
+            # Financial Services (large banks)
+            'JPM', 'BAC', 'WFC', 'C', 'GS', 'MS', 'BLK',
+            
+            # Utilities
+            'NEE', 'DUK', 'SO', 'D', 'EXC', 'XEL', 'SRE', 'AEP',
+            
+            # Large Cap Dividend Stocks
+            'V', 'MA', 'HD', 'MCD', 'MMM', 'CAT', 'IBM', 'VZ', 'T'
         ]
         return [asset for asset in assets if asset in stable_indicators]
     
