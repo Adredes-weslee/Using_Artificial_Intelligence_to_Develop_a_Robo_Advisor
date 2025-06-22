@@ -13,6 +13,13 @@ import src.config as config
 from src.models.cloud_optimized_agent import CloudOptimizedRLManager
 from src.models.rl_agent_manager import RLAgentManager
 
+
+try:
+    from tabpfn import TabPFNRegressor
+    TABPFN_AVAILABLE = True
+except ImportError:
+    TABPFN_AVAILABLE = False
+    
 st.set_page_config(page_title="Portfolio Optimizer", page_icon="📈", layout="wide")
 st.title("📈 AI-Powered Portfolio Optimizer")
 st.markdown("### Generate optimal portfolio allocations using reinforcement learning")
