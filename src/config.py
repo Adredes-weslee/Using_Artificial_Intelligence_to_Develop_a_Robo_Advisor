@@ -157,3 +157,21 @@ RISK_PROFILES = {
         'description': "Focuses on maximizing returns, accepting higher volatility."
     }
 }
+
+
+DEFAULT_RETURN_WEIGHT = 0.5
+DEFAULT_RISK_WEIGHT = 0.5
+
+# Market Regime Detection
+MARKET_REGIME_LOOKBACK_DAYS = 252
+VOLATILITY_THRESHOLD_HIGH = 0.25
+VOLATILITY_THRESHOLD_LOW = 0.15
+DRAWDOWN_THRESHOLD = -0.15
+TREND_THRESHOLD = 0.1
+
+# Period Analysis Options
+HISTORICAL_PERIODS = {
+    "Bull Market": ("2010-01-01", "2019-12-31"),
+    "COVID Period": ("2020-01-01", "2022-12-31"),
+    "Full Period": ("2010-01-01", "2023-09-08")
+}
