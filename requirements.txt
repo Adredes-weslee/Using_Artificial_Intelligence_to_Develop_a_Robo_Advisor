@@ -1,11 +1,29 @@
+# AI-Powered Robo-Advisor - Streamlit Community Cloud Requirements
+# Optimized for TabPFN + PyTorch deployment with cloud fallbacks
+
+# Core Web Framework
 streamlit
+
+# Data Processing & Analysis
 pandas
 numpy
-plotly
-transformers
+
+# Machine Learning - Foundation Models
+tabpfn
+scikit-learn
+
+# Deep Learning - PyTorch (CPU-only for cloud)
 torch
-vaderSentiment
-emoji
-python-dotenv
-wordcloud
-tqdm
+
+# Financial Data & Market APIs
+yfinance
+
+# Visualization & Plotting
+plotly
+matplotlib
+
+# Model Persistence & Utilities
+joblib
+requests
+psutil
+pathlib2
