@@ -1,4 +1,6 @@
 """Executes the training pipeline for the RL portfolio agent with multi-profile support."""
+import os
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'  # ← ADD THIS LINE
 import pandas as pd
 import numpy as np
 import sys
@@ -45,6 +47,8 @@ def main():
         risk_profiles = ['Conservative', 'Balanced', 'Aggressive']
         results_summary = {}
         
+        # Around line 40-90, replace this entire section:
+
         for risk_profile in risk_profiles:
             print(f"\n" + "="*80)
             print(f"Training {risk_profile} RL Agent")
@@ -54,10 +58,14 @@ def main():
             recommended_assets = get_recommended_assets_for_profile(risk_profile, max_assets=15)
             available_assets = [asset for asset in recommended_assets if asset in df.columns]
             
+            # FIX 2: REMOVE DUPLICATES
+            available_assets = list(dict.fromkeys(available_assets))
+            
             if len(available_assets) < 5:
                 print(f"❌ Insufficient assets for {risk_profile} profile: {len(available_assets)}")
-                # Fallback to default portfolio assets
-                available_assets = [asset for asset in config.DEFAULT_PORTFOLIO_ASSETS[:15] if asset in df.columns]
+                # Fallback to default portfolio assets  
+                fallback_assets = [asset for asset in config.DEFAULT_PORTFOLIO_ASSETS[:15] if asset in df.columns]
+                available_assets = list(dict.fromkeys(fallback_assets))  # Remove duplicates
             
             print(f"Selected assets for {risk_profile} profile ({len(available_assets)}):")
             for i, asset in enumerate(available_assets, 1):
@@ -71,14 +79,26 @@ def main():
                 print(f"❌ Insufficient data points: {len(selected_data)}")
                 continue
             
-            # Calculate MPT benchmark
+            # FIX 3: CALCULATE MPT BENCHMARK WITH CORRECT SIGNATURE
             try:
                 benchmark_risk_tolerance = {'Conservative': 0.3, 'Balanced': 0.5, 'Aggressive': 0.8}[risk_profile]
-                mpt_weights, _ = mean_variance_optimization(
-                    benchmark_risk_tolerance, available_assets, selected_data
+                
+                print(f"Performing mean variance optimization for risk tolerance: {benchmark_risk_tolerance}")
+                print(f"Assets: {available_assets}")
+                
+                # Call MPT with the EXACT signature from portfolio_math.py
+                allocation, portfolio_performance = mean_variance_optimization(
+                    risk_tolerance=benchmark_risk_tolerance,  # First parameter: float
+                    tickers=available_assets,                 # Second parameter: List[str]  
+                    price_data=selected_data                  # Third parameter: pd.DataFrame
                 )
-                mpt_weights_array = mpt_weights.values.flatten()
+                
+                # Extract weights from the allocation DataFrame
+                mpt_weights_array = allocation['Weight'].values
+                    
+                print(f"Optimization successful. Weights sum: {mpt_weights_array.sum():.6f}")
                 print(f"✓ MPT benchmark calculated for risk tolerance {benchmark_risk_tolerance}")
+                
             except Exception as e:
                 print(f"⚠️  MPT calculation failed: {e}, using equal weights")
                 mpt_weights_array = np.ones(len(available_assets)) / len(available_assets)
@@ -91,19 +111,33 @@ def main():
                 market_data=selected_data
             )
             
-            # Evaluate the agent
+            # FIX 1: EVALUATE THE AGENT WITH CORRECT MODEL NAME AND PATH
             print(f"\nEvaluating {risk_profile} agent...")
-            model_name = f"model_{risk_profile.lower()}_rl"
-            
+
+            # Use the actual saved model filename format with FULL PATH
+            asset_string = "_".join(sorted(available_assets))
+            model_name = f"{risk_profile}_{asset_string}"  # Just the filename
+            model_path = config.OUTPUT_DIR / f"{model_name}.pth"  # Full path with .pth extension
+
+            print(f"Looking for model at: {model_path}")
+
+            # Check if model file exists
+            if not model_path.exists():
+                print(f"❌ Model file not found: {model_path}")
+                print(f"Available files in {config.OUTPUT_DIR}:")
+                for file in config.OUTPUT_DIR.glob("*.pth"):
+                    print(f"  - {file.name}")
+                results_summary[risk_profile] = {'error': f'Model file not found: {model_path}'}
+                continue
+
             try:
                 evaluation_results, eval_agent = evaluate_rl_agent(
                     selected_data=selected_data,
-                    model_name=model_name,
+                    model_name=str(model_path),  # Pass full path as string
                     mpt_weights=mpt_weights_array,
                     window_size=50,
                     rebalance_period=config.RL_MODEL_CONFIGS[risk_profile]['rebalance_frequency']
                 )
-                
                 # Calculate performance statistics
                 rl_stats = calculate_performance_stats(evaluation_results['returns_rl'])
                 mpt_stats = calculate_performance_stats(evaluation_results['returns_mpt'])
