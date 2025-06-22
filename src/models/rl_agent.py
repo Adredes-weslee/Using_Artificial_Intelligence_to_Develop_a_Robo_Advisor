@@ -121,6 +121,43 @@ class StockEnvironment:
         weighted_returns = np.dot(returns.values, weights)
         
         return weighted_returns, sharpe_array
+    
+    def calculate_dynamic_reward(self, returns: np.ndarray, weights: np.ndarray, 
+                               return_weight: float = 0.5, risk_weight: float = 0.5,
+                               market_regime: str = "Stable") -> float:
+        """Calculate reward with configurable risk/return balance."""
+        
+        portfolio_return = np.mean(returns)
+        portfolio_volatility = np.std(returns)
+        
+        # Base reward components
+        return_component = portfolio_return
+        risk_component = -portfolio_volatility  # Negative because we want to minimize risk
+        
+        # Market regime adjustments
+        regime_multipliers = {
+            "🔴 High Volatility/Bear Market": {"return": 0.7, "risk": 1.3},  # Emphasize risk management
+            "🟢 Low Volatility/Bull Market": {"return": 1.3, "risk": 0.7},   # Emphasize returns
+            "🟡 High Volatility/Uncertain": {"return": 0.9, "risk": 1.1},   # Slight risk focus
+            "🔵 Moderate Volatility/Stable": {"return": 1.0, "risk": 1.0}    # Balanced
+        }
+        
+        # Extract regime key for lookup
+        for key in regime_multipliers.keys():
+            if key.split()[0] in market_regime:
+                multipliers = regime_multipliers[key]
+                break
+        else:
+            multipliers = {"return": 1.0, "risk": 1.0}
+        
+        # Calculate final reward
+        adjusted_return_weight = return_weight * multipliers["return"]
+        adjusted_risk_weight = risk_weight * multipliers["risk"]
+        
+        reward = (adjusted_return_weight * return_component + 
+                  adjusted_risk_weight * risk_component)
+        
+        return reward
 
 
 class DQNNetwork(nn.Module):
@@ -435,8 +472,10 @@ class Agent:
 def train_rl_agent(selected_data: pd.DataFrame, window_size: int = 90, 
                    episode_count: int = 10, batch_size: int = 32, 
                    rebalance_period: int = 45, mpt_weights: np.ndarray = None,
-                   save_path: Optional[Path] = None) -> Tuple[Agent, dict]:
-    """Train the RL agent using PyTorch.
+                   save_path: Optional[Path] = None,
+                   return_weight: float = 0.5, risk_weight: float = 0.5,  # ADDED THESE
+                   market_regime: str = "Stable") -> Tuple[Agent, dict]:    # ADDED THIS
+    """Train the RL agent using PyTorch with configurable objectives.
 
     Args:
         selected_data (pd.DataFrame): Selected stock price data.
@@ -446,11 +485,16 @@ def train_rl_agent(selected_data: pd.DataFrame, window_size: int = 90,
         rebalance_period (int): Period for portfolio rebalancing.
         mpt_weights (np.ndarray, optional): MPT benchmark weights for comparison.
         save_path (Path, optional): Path to save the trained model.
+        return_weight (float): Weight for return component in reward (0.0 to 1.0).
+        risk_weight (float): Weight for risk component in reward (0.0 to 1.0).
+        market_regime (str): Current market regime for dynamic adjustments.
 
     Returns:
         Tuple[Agent, dict]: Trained agent and training history.
     """
     print(f"Training RL agent with PyTorch - {episode_count} episodes...")
+    print(f"Objective: {return_weight:.0%} returns, {risk_weight:.0%} risk management")
+    print(f"Market regime: {market_regime}")
     print(f"Window size: {window_size}, Batch size: {batch_size}, Rebalance period: {rebalance_period}")
     
     # Initialize agent and environment
@@ -496,6 +540,17 @@ def train_rl_agent(selected_data: pd.DataFrame, window_size: int = 90,
             
             # Calculate portfolio returns and rewards based on the selected action
             weighted_returns, reward = env.get_reward(action[0], date1, t)
+            
+            # ADDED: Apply dynamic reward if custom objective is selected
+            if return_weight != 0.5 or risk_weight != 0.5:
+                # Use dynamic reward calculation
+                dynamic_reward = env.calculate_dynamic_reward(
+                    weighted_returns, action[0], return_weight, risk_weight, market_regime
+                )
+                # Override the Sharpe ratio reward with our custom reward
+                reward = np.array([dynamic_reward] * len(reward))
+                if e == 1 and t == window_size:  # Print once per training session
+                    print(f"Using dynamic reward system: return_weight={return_weight}, risk_weight={risk_weight}")
             
             if mpt_weights is not None:
                 # Calculate returns and rewards for MPT weighted portfolio
