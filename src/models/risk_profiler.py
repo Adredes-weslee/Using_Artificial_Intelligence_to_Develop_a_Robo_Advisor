@@ -25,6 +25,77 @@ except ImportError:
 
 from ..config import RANDOM_STATE, TEST_SIZE, TARGET_COLUMN
 
+def get_gpu_safe_sample_size(total_samples: int, gpu_memory_gb: float = 8.0) -> int:
+    """Calculate safe sample size for GPU training."""
+    
+    # Conservative limits based on GPU memory
+    memory_limits = {
+        4.0: 8000,    # 4GB GPU
+        6.0: 12000,   # 6GB GPU  
+        8.0: 15000,   # 8GB GPU (your case)
+        12.0: 22000,  # 12GB GPU
+        16.0: 30000,  # 16GB GPU
+        24.0: 45000   # 24GB GPU
+    }
+    
+    # Find appropriate limit
+    safe_limit = memory_limits.get(gpu_memory_gb, 10000)
+    
+    # Use smaller of: memory limit or actual dataset size
+    recommended_size = min(safe_limit, total_samples)
+    
+    print(f"💾 GPU Memory: {gpu_memory_gb}GB")
+    print(f"📊 Dataset: {total_samples:,} samples")
+    print(f"🎯 Recommended: {recommended_size:,} samples ({recommended_size/total_samples*100:.1f}%)")
+    
+    return recommended_size
+
+
+def create_smart_gpu_subset(X: pd.DataFrame, y: pd.Series, 
+                           max_samples: int = None) -> Tuple[pd.DataFrame, pd.Series]:
+    """Create GPU-safe subset with representative sampling."""
+    
+    if max_samples is None:
+        # Auto-detect based on GPU memory
+        gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
+        max_samples = get_gpu_safe_sample_size(len(X), gpu_memory)
+    
+    if len(X) <= max_samples:
+        print(f"✅ Dataset size ({len(X):,}) within GPU limits")
+        return X, y
+    
+    print(f"🔧 Creating GPU-safe subset: {max_samples:,} from {len(X):,} samples")
+    
+    # Stratified sampling to maintain risk tolerance distribution
+    try:
+        # Create risk buckets for stratification
+        risk_buckets = pd.qcut(y, q=10, duplicates='drop', labels=False)
+        
+        from sklearn.model_selection import train_test_split
+        X_subset, _, y_subset, _ = train_test_split(
+            X, y, 
+            train_size=max_samples, 
+            stratify=risk_buckets,
+            random_state=RANDOM_STATE
+        )
+        
+        print(f"✅ Created stratified subset maintaining risk distribution")
+        
+    except Exception as e:
+        print(f"⚠️ Stratified sampling failed: {e}")
+        print("🔄 Using random sampling instead")
+        
+        # Fallback to random sampling
+        indices = np.random.choice(len(X), size=max_samples, replace=False)
+        X_subset = X.iloc[indices]
+        y_subset = y.iloc[indices]
+    
+    # Verify distribution preservation
+    print(f"📊 Original risk range: {y.min():.3f} - {y.max():.3f}")
+    print(f"📊 Subset risk range:   {y_subset.min():.3f} - {y_subset.max():.3f}")
+    
+    return X_subset, y_subset
+
 
 def get_best_model_for_system() -> str:
     """Determine the best model based on system capabilities."""
@@ -119,26 +190,33 @@ def train_extra_trees_fallback(X_train: pd.DataFrame, y_train: pd.Series) -> Ext
 
 def train_risk_tolerance_model(X: pd.DataFrame, y: pd.Series, 
                              test_size: float = TEST_SIZE,
-                             random_state: int = RANDOM_STATE) -> Tuple[Any, Dict[str, float]]:
-    """Train the best available model for risk tolerance prediction.
-    
-    Args:
-        X: Feature matrix
-        y: Target vector  
-        test_size: Test split ratio
-        random_state: Random seed
-        
-    Returns:
-        Tuple of (trained_model, performance_metrics)
-    """
+                             random_state: int = RANDOM_STATE,
+                             use_gpu_subset: bool = True) -> Tuple[Any, Dict[str, float]]:
+    """Train the best available model for risk tolerance prediction."""
     print("🎯 Starting risk tolerance model training...")
     
-    # Split data
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=test_size, random_state=random_state
-    )
+    # Determine if we should use GPU subset
+    model_type = get_best_model_for_system()
+    
+    if use_gpu_subset and model_type.startswith("tabpfn") and torch.cuda.is_available():
+        # Create GPU-safe subset
+        X_gpu, y_gpu = create_smart_gpu_subset(X, y, max_samples=15000)
+        
+        # Split the subset
+        X_train, X_test, y_train, y_test = train_test_split(
+            X_gpu, y_gpu, test_size=test_size, random_state=random_state
+        )
+        subset_used = True
+    else:
+        # Use full dataset
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=test_size, random_state=random_state
+        )
+        subset_used = False
     
     print(f"📊 Dataset split: {len(X_train)} train, {len(X_test)} test samples")
+    if subset_used:
+        print(f"🎯 Using GPU-optimized subset ({len(X_train)+len(X_test):,} from {len(X):,} total)")
     
     # Determine best model
     model_type = get_best_model_for_system()
@@ -160,12 +238,13 @@ def train_risk_tolerance_model(X: pd.DataFrame, y: pd.Series,
     y_pred_train = model.predict(X_train)
     y_pred_test = model.predict(X_test)
     
+    # Fix: Use sqrt(mean_squared_error) instead of squared=False
     metrics = {
         'model_type': model_name,
         'train_r2': r2_score(y_train, y_pred_train),
         'test_r2': r2_score(y_test, y_pred_test),
-        'train_rmse': mean_squared_error(y_train, y_pred_train, squared=False),
-        'test_rmse': mean_squared_error(y_test, y_pred_test, squared=False)
+        'train_rmse': np.sqrt(mean_squared_error(y_train, y_pred_train)),  # ← Fixed
+        'test_rmse': np.sqrt(mean_squared_error(y_test, y_pred_test))      # ← Fixed
     }
     
     # Print results
@@ -342,7 +421,7 @@ def evaluate_model(model: Any, X_test: pd.DataFrame, y_test: pd.Series) -> Dict[
     
     return {
         'r2_score': r2_score(y_test, y_pred),
-        'rmse': mean_squared_error(y_test, y_pred, squared=False),
+        'rmse': np.sqrt(mean_squared_error(y_test, y_pred)),  # ← Fixed
         'mae': np.mean(np.abs(y_test - y_pred))
     }
 
@@ -352,3 +431,61 @@ def train_extra_trees_model(X_train: pd.DataFrame, y_train: pd.Series, **kwargs)
     """Backward compatibility wrapper."""
     print("⚠️  Using deprecated function. Consider train_risk_tolerance_model()")
     return train_extra_trees_fallback(X_train, y_train)
+
+# def fair_comparison_test():
+#     """Compare TabPFN vs Extra Trees on same full dataset."""
+#     import os
+    
+#     print("🔬 Fair Comparison: TabPFN vs Extra Trees")
+#     print("=" * 50)
+    
+#     # Load your full dataset - FIX THE IMPORT
+#     try:
+#         # Try relative import first
+#         from ..data.data_loader import load_processed_data
+#         X, y = load_processed_data()
+#     except ImportError:
+#         # Fallback: Load data directly
+#         print("📂 Loading data directly from CSV...")
+#         import pandas as pd
+#         data_path = Path(__file__).parent.parent.parent / "data" / "processed" / "attributes_risk_tolerance.csv"
+        
+#         if not data_path.exists():
+#             raise FileNotFoundError(f"Data file not found: {data_path}")
+        
+#         df = pd.read_csv(data_path)
+#         X = df.drop('Risk_tolerance', axis=1)
+#         y = df['Risk_tolerance']
+#         print(f"✅ Loaded dataset: {X.shape}")
+    
+#     # Test TabPFN on full dataset (CPU mode to avoid memory issues)
+#     print("🧠 Testing TabPFN (CPU) on full dataset...")
+#     os.environ['CUDA_VISIBLE_DEVICES'] = ''  # Force CPU
+    
+#     tabpfn_model, tabpfn_metrics = train_risk_tolerance_model(
+#         X, y, use_gpu_subset=False  # Use full dataset
+#     )
+    
+#     # Test Extra Trees with same parameters as notebook
+#     print("🌲 Testing Extra Trees with notebook parameters...")
+#     et_model = ExtraTreesRegressor(
+#         n_estimators=50,
+#         criterion='squared_error', 
+#         max_depth=25,
+#         random_state=42,
+#         n_jobs=-1
+#     )
+    
+#     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+#     et_model.fit(X_train, y_train)
+    
+#     et_metrics = {
+#         'test_r2': et_model.score(X_test, y_test),
+#         'test_rmse': np.sqrt(mean_squared_error(y_test, et_model.predict(X_test)))
+#     }
+    
+#     print("\n📊 Fair Comparison Results:")
+#     print(f"TabPFN     - Test R²: {tabpfn_metrics['test_r2']:.5f}, Test RMSE: {tabpfn_metrics['test_rmse']:.5f}")
+#     print(f"Extra Trees - Test R²: {et_metrics['test_r2']:.5f}, Test RMSE: {et_metrics['test_rmse']:.5f}")
+    
+#     return tabpfn_metrics, et_metrics
