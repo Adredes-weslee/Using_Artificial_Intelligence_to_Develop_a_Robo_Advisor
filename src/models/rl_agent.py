@@ -233,14 +233,29 @@ class Agent:
         """Load a saved PyTorch model.
         
         Args:
-            model_name: Name of the model file to load
+            model_name: Name of the model file to load (can be full path or just filename)
             
         Returns:
             DQNNetwork: Loaded PyTorch model
         """
-        model_path = Path(f"../data/{model_name}")
+        # Check if model_name is already a full path
+        if Path(model_name).is_absolute() and Path(model_name).exists():
+            model_path = Path(model_name)
+            print(f"Loading model from absolute path: {model_path}")
+        else:
+            # Try different relative path combinations
+            model_path = Path(f"../data/{model_name}")
+            if not model_path.exists():
+                model_path = Path(f"../data/output/{model_name}")
+            if not model_path.exists():
+                # Try adding .pth extension if not present
+                if not model_name.endswith('.pth'):
+                    model_path = Path(f"../data/output/{model_name}.pth")
+            
+            print(f"Loading model from relative path: {model_path}")
+        
         if not model_path.exists():
-            model_path = Path(f"../data/output/{model_name}")
+            raise FileNotFoundError(f"Model file not found: {model_path}")
         
         model = DQNNetwork(self.input_shape, self.portfolio_size, self.action_size)
         model.load_state_dict(torch.load(model_path, map_location=self.device))
@@ -661,12 +676,7 @@ def plot_training_results(training_history: dict, save_path: Optional[Path] = No
 
 
 def plot_evaluation_results(evaluation_results: dict, save_path: Optional[Path] = None) -> None:
-    """Plot evaluation results comparing RL agent to MPT benchmark.
-
-    Args:
-        evaluation_results (dict): Evaluation results from evaluate_rl_agent.
-        save_path (Path, optional): Path to save the plots.
-    """
+    """Plot evaluation results comparing RL agent to MPT benchmark."""
     plt.figure(figsize=(12, 6))
     
     # Plot cumulative returns comparison
@@ -682,6 +692,15 @@ def plot_evaluation_results(evaluation_results: dict, save_path: Optional[Path] 
     plt.grid(True, alpha=0.3)
     
     if save_path:
-        plt.savefig(save_path / 'rl_vs_mpt_comparison.png', dpi=300, bbox_inches='tight')
+        # Fix: Use save_path directly, not as a directory
+        if save_path.suffix == '.png':
+            plot_path = save_path
+        else:
+            plot_path = save_path / 'rl_vs_mpt_comparison.png'
+        
+        # Ensure parent directory exists
+        plot_path.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+        print(f"✅ Plot saved to: {plot_path}")
     
     plt.show()
