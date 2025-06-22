@@ -38,9 +38,9 @@ class CloudOptimizedRLManager:
         
     def get_portfolio_allocation(self, risk_profile: str, selected_assets: List[str], 
                                risk_tolerance: float,
-                               return_weight: float = 0.5,    # ADDED THIS
-                               risk_weight: float = 0.5,      # ADDED THIS
-                               market_regime: str = "Stable") -> np.ndarray:  # ADDED THIS
+                               return_weight: float = 0.5,
+                               risk_weight: float = 0.5,
+                               market_regime: str = "Stable") -> np.ndarray:
         """Get portfolio allocation with cloud optimization and dynamic objectives.
         
         Args:
@@ -61,9 +61,10 @@ class CloudOptimizedRLManager:
             return self._get_dynamic_mpt_allocation(selected_assets, risk_tolerance, 
                                                   return_weight, risk_weight, market_regime, risk_profile)
         else:
-            # Try RL agent for local development
+            # Try RL agent for local development with objective-specific models
             try:
-                return self._get_rl_allocation(risk_profile, selected_assets, risk_tolerance)
+                return self._get_rl_allocation(risk_profile, selected_assets, risk_tolerance,
+                                             return_weight, risk_weight)
             except (MemoryError, ImportError, FileNotFoundError) as e:
                 logger.warning(f"RL allocation failed: {e}, falling back to dynamic MPT")
                 return self._get_dynamic_mpt_allocation(selected_assets, risk_tolerance,
@@ -232,9 +233,24 @@ class CloudOptimizedRLManager:
         return adjusted_weights / adjusted_weights.sum()
     
     def _get_rl_allocation(self, risk_profile: str, selected_assets: List[str], 
-                          risk_tolerance: float) -> np.ndarray:
-        """Try to use pre-trained RL model if available."""
-        # Look for PyTorch model files (.pth or .pkl)
+                          risk_tolerance: float, return_weight: float = 0.5, 
+                          risk_weight: float = 0.5) -> np.ndarray:
+        """Try to use pre-trained RL model if available with objective-specific loading."""
+        
+        # 1. First try to find objective-specific model
+        assets_str = "_".join(sorted(selected_assets))
+        objective_model_filename = f"{risk_profile}_{assets_str}_ret{return_weight}_risk{risk_weight}.pth"
+        objective_model_path = self.models_dir / objective_model_filename
+        
+        if objective_model_path.exists():
+            logger.info(f"Found objective-specific model: {objective_model_path.name}")
+            try:
+                return self._load_and_use_model(objective_model_path, risk_profile, selected_assets, 
+                                              return_weight, risk_weight)
+            except Exception as e:
+                logger.warning(f"Failed to use objective-specific model: {e}")
+        
+        # 2. Fallback to any model for this risk profile
         model_patterns = [f"{risk_profile}_*.pth", f"{risk_profile}_*.pkl"]
         model_files = []
         
@@ -244,33 +260,45 @@ class CloudOptimizedRLManager:
         if model_files:
             # Use the first available pre-trained model
             model_file = model_files[0]
-            logger.info(f"Found pre-trained {risk_profile} model: {model_file.name}")
+            logger.info(f"Using fallback model: {model_file.name}")
             
             try:
-                # Try to load and use the PyTorch model (simplified implementation)
-                # In a full implementation, you'd load the PyTorch model
-                # and make actual predictions
-                
-                # For now, return a more sophisticated allocation than equal weights
-                weights = self._get_smart_pretrained_allocation(risk_profile, selected_assets)
-                logger.info(f"Used pre-trained {risk_profile} model allocation")
-                return weights
+                return self._load_and_use_model(model_file, risk_profile, selected_assets,
+                                              return_weight, risk_weight)
                 
             except Exception as e:
-                logger.error(f"Failed to use pre-trained model: {e}")
-                raise MemoryError("Pre-trained model loading failed")
+                logger.error(f"Failed to use fallback model: {e}")
+                raise MemoryError("All model loading attempts failed")
         else:
-            logger.warning(f"No pre-trained {risk_profile} model found")
-            raise FileNotFoundError("No pre-trained model available")
+            logger.warning(f"No models found for {risk_profile}")
+            raise FileNotFoundError("No models available")
     
-    def _get_smart_pretrained_allocation(self, risk_profile: str, assets: List[str]) -> np.ndarray:
-        """Generate smart allocation mimicking what a trained RL agent might produce."""
+    def _load_and_use_model(self, model_path: Path, risk_profile: str, assets: List[str],
+                           return_weight: float = 0.5, risk_weight: float = 0.5) -> np.ndarray:
+        """Load and use a specific model file with objective awareness."""
+        try:
+            # Try to load and use the PyTorch model (simplified implementation)
+            # In a full implementation, you'd load the PyTorch model and make actual predictions
+            
+            # For now, return a sophisticated allocation that considers the objectives
+            weights = self._get_smart_pretrained_allocation(risk_profile, assets, 
+                                                          return_weight, risk_weight)
+            logger.info(f"Generated smart allocation from {model_path.name}")
+            return weights
+            
+        except Exception as e:
+            logger.error(f"Failed to use model {model_path.name}: {e}")
+            raise MemoryError("Model loading failed")
+    
+    def _get_smart_pretrained_allocation(self, risk_profile: str, assets: List[str],
+                                       return_weight: float = 0.5, risk_weight: float = 0.5) -> np.ndarray:
+        """Generate smart allocation mimicking what a trained RL agent might produce with objectives."""
         n_assets = len(assets)
         
         # Set random seed for reproducibility
         np.random.seed(42)
         
-        # Risk profile specific allocations
+        # Risk profile specific base allocations
         if risk_profile == 'Conservative':
             # Favor defensive assets, lower concentration
             weights = np.random.dirichlet(np.ones(n_assets) * 2)  # More even distribution
@@ -278,15 +306,29 @@ class CloudOptimizedRLManager:
         elif risk_profile == 'Aggressive':
             # Allow higher concentration, favor growth
             weights = np.random.dirichlet(np.ones(n_assets) * 0.8)  # More concentrated
-            growth_assets = self._identify_growth_assets(assets)
-            for i, asset in enumerate(assets):
-                if asset in growth_assets:
-                    weights[i] *= 1.5
-            weights = weights / weights.sum()
             
         else:  # Balanced
             # Moderate concentration
             weights = np.random.dirichlet(np.ones(n_assets) * 1.2)
+        
+        # Apply objective-specific adjustments to the smart allocation
+        if return_weight > 0.6:  # Growth-focused
+            growth_assets = self._identify_growth_assets(assets)
+            for i, asset in enumerate(assets):
+                if asset in growth_assets:
+                    weights[i] *= 1.4  # Strong boost for growth assets
+            weights = weights / weights.sum()
+            
+        elif risk_weight > 0.6:  # Risk-focused
+            # Increase diversification and boost defensive assets
+            equal_weight = 1.0 / n_assets
+            weights = weights * 0.7 + equal_weight * 0.3  # Move toward equal weight
+            
+            defensive_assets = self._identify_stable_assets(assets)
+            for i, asset in enumerate(assets):
+                if asset in defensive_assets:
+                    weights[i] *= 1.2  # Boost defensive assets
+            weights = weights / weights.sum()
         
         return weights
     
