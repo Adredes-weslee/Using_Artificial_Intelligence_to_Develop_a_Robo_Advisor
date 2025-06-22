@@ -5,6 +5,7 @@ import numpy as np
 import sys
 import os
 from pathlib import Path
+from src.utils.market_analysis import detect_market_regime, get_regime_recommendations  # ADD THIS LINE
 
 
 try:
