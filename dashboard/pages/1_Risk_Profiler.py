@@ -64,13 +64,49 @@ def load_risk_model():
         # Try to load with CPU mapping for cloud compatibility
         import torch
         if is_cloud or not torch.cuda.is_available():
-            # CLOUD-SAFE LOADING
+            # CLOUD-SAFE LOADING with TabPFN foundation model handling
             try:
-                model = torch.load(model_path, map_location=torch.device('cpu'))
-                model_type = "CPU-Compatible Model (Cloud)"
-                st.success(f"✅ {model_type} loaded successfully")
-                return model, model_type
-            except:
+                import warnings
+                
+                # Suppress TabPFN foundation model warnings
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore", category=UserWarning, module="torch._weights_only_unpickler")
+                    warnings.filterwarnings("ignore", message=".*TabPFN.*")
+                    warnings.filterwarnings("ignore", message=".*foundation.*")
+                    
+                    # Load the model file
+                    model = torch.load(model_path, map_location=torch.device('cpu'))
+                
+                # Test if the model actually works (TabPFN foundation model test)
+                if hasattr(model, 'predict'):
+                    try:
+                        # Try a tiny prediction to see if TabPFN foundation models work
+                        test_input = np.array([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]]).reshape(1, -1)
+                        _ = model.predict(test_input)
+                        
+                        # If we get here, TabPFN foundation models work
+                        model_type = "TabPFN Model (Cloud-Compatible)"
+                        st.success(f"✅ {model_type} loaded successfully")
+                        return model, model_type
+                        
+                    except Exception as tabpfn_test_error:
+                        # TabPFN foundation model failed - use fallback immediately
+                        if "TabPFN" in str(tabpfn_test_error) or "foundation" in str(tabpfn_test_error).lower():
+                            st.warning("⚠️ TabPFN foundation models unavailable in cloud")
+                        else:
+                            st.warning(f"⚠️ Model prediction test failed: {str(tabpfn_test_error)[:50]}...")
+                            
+                        st.info("💡 **Cloud Mode**: Using simplified heuristic risk assessment")
+                        return "cloud_fallback", "Cloud Heuristic Model (TabPFN Fallback)"
+                else:
+                    # Model loaded but no predict method
+                    model_type = "CPU-Compatible Model (Cloud)"
+                    st.success(f"✅ {model_type} loaded successfully")
+                    return model, model_type
+                    
+            except Exception as torch_error:
+                # Torch loading failed completely
+                st.warning(f"⚠️ Torch model loading failed: {str(torch_error)[:50]}...")
                 # If torch loading fails, try joblib
                 try:
                     model = joblib.load(model_path)
@@ -130,23 +166,6 @@ def load_risk_model():
 
 # Load the model
 model, model_type = load_risk_model()
-
-# Add this debugging section right after load_risk_model() call
-st.write("🔍 **Debug Information:**")
-st.write(f"**Project Root**: {project_root}")
-st.write(f"**Config OUTPUT_DIR**: {config.OUTPUT_DIR}")
-st.write(f"**Config RISK_MODEL_FILE**: {config.RISK_MODEL_FILE}")
-st.write(f"**Full Model Path**: {config.OUTPUT_DIR / config.RISK_MODEL_FILE}")
-st.write(f"**Model Path Exists**: {(config.OUTPUT_DIR / config.RISK_MODEL_FILE).exists()}")
-
-# List files in output directory
-output_dir = config.OUTPUT_DIR
-if output_dir.exists():
-    st.write(f"**Files in {output_dir}:**")
-    for file in output_dir.iterdir():
-        st.write(f"  - {file.name}")
-else:
-    st.write(f"**Output directory {output_dir} does not exist**")
 
 # Display environment info
 if is_cloud:
