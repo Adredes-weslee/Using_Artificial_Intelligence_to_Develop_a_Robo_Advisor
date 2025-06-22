@@ -3,15 +3,22 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import yfinance as yf
+import os
+import socket
 from pathlib import Path
 import sys
-import os
 
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 import src.config as config
 from src.models.cloud_optimized_agent import CloudOptimizedRLManager
-from src.models.rl_agent_manager import RLAgentManager
+
+# Only import local RL manager if not in cloud
+try:
+    from src.models.rl_agent_manager import RLAgentManager
+    RL_MANAGER_AVAILABLE = True
+except ImportError:
+    RL_MANAGER_AVAILABLE = False
 
 try:
     from tabpfn import TabPFNRegressor
@@ -23,8 +30,25 @@ st.set_page_config(page_title="Portfolio Optimizer", page_icon="📈", layout="w
 st.title("📈 AI-Powered Portfolio Optimizer")
 st.markdown("### Generate optimal portfolio allocations using reinforcement learning")
 
+# CLOUD DETECTION FUNCTION (same as other files for consistency)
+def detect_cloud_environment():
+    """Detect if running on Streamlit Cloud."""
+    cloud_indicators = [
+        os.environ.get('STREAMLIT_CLOUD') == 'true',
+        os.environ.get('STREAMLIT_SHARING') == 'true', 
+        'streamlit.io' in socket.getfqdn().lower(),
+        'streamlitapp.com' in socket.getfqdn().lower(),
+        os.path.exists('/.streamlit'),
+        'SPACE_ID' in os.environ,
+        'RENDER' in os.environ,
+        'RAILWAY' in os.environ,
+        os.path.exists('/opt/conda'),
+        os.environ.get('PWD', '').startswith('/mount/src/')
+    ]
+    return any(cloud_indicators)
+
 # Check environment
-is_cloud = os.environ.get('STREAMLIT_CLOUD') == 'true'
+is_cloud = detect_cloud_environment()
 
 # Display mode
 if is_cloud:
@@ -60,26 +84,94 @@ def get_market_data_with_fallback(tickers: list) -> pd.DataFrame:
             if available_tickers:
                 return historical_data[available_tickers]
             else:
-                st.error("❌ No data available for selected tickers")
-                return pd.DataFrame()
+                if is_cloud:
+                    st.warning("⚠️ Cloud mode: Using synthetic data for demonstration")
+                    # Generate synthetic data for cloud demo
+                    dates = pd.date_range(start='2023-01-01', end='2024-01-01', freq='D')
+                    synthetic_data = pd.DataFrame()
+                    for ticker in tickers:
+                        # Simple synthetic price data
+                        np.random.seed(hash(ticker) % 2**32)  # Reproducible per ticker
+                        prices = 100 * np.cumprod(1 + np.random.normal(0.0005, 0.02, len(dates)))
+                        synthetic_data[ticker] = prices
+                    synthetic_data.index = dates
+                    return synthetic_data
+                else:
+                    st.error("❌ No data available for selected tickers")
+                    return pd.DataFrame()
         else:
-            st.error("❌ No fallback data available. Please run data processing first.")
-            return pd.DataFrame()
+            if is_cloud:
+                st.warning("⚠️ Cloud mode: No historical data file, using synthetic data")
+                # Generate synthetic data for cloud demo
+                dates = pd.date_range(start='2023-01-01', end='2024-01-01', freq='D')
+                synthetic_data = pd.DataFrame()
+                for ticker in tickers:
+                    np.random.seed(hash(ticker) % 2**32)  # Reproducible per ticker
+                    prices = 100 * np.cumprod(1 + np.random.normal(0.0005, 0.02, len(dates)))
+                    synthetic_data[ticker] = prices
+                synthetic_data.index = dates
+                return synthetic_data
+            else:
+                st.error("❌ No fallback data available. Please run data processing first.")
+                return pd.DataFrame()
 
 def load_rl_managers():
-    """Load both RL managers."""
+    """Load both RL managers with cloud compatibility."""
     try:
         cloud_manager = CloudOptimizedRLManager(config.OUTPUT_DIR)
         
-        if not is_cloud:
-            rl_manager = RLAgentManager(config.OUTPUT_DIR)
-            return cloud_manager, rl_manager
+        if not is_cloud and RL_MANAGER_AVAILABLE:
+            try:
+                rl_manager = RLAgentManager(config.OUTPUT_DIR)
+                return cloud_manager, rl_manager
+            except Exception as local_error:
+                st.warning(f"⚠️ Could not load local RL manager: {str(local_error)[:50]}...")
+                return cloud_manager, None
         else:
             return cloud_manager, None
             
     except Exception as e:
-        st.error(f"❌ Error loading RL managers: {e}")
-        return None, None
+        if is_cloud:
+            st.warning(f"⚠️ Cloud optimization manager not available: {str(e)[:50]}...")
+            # Create a minimal fallback manager
+            return create_fallback_manager(), None
+        else:
+            st.error(f"❌ Error loading RL managers: {e}")
+            return None, None
+
+def create_fallback_manager():
+    """Create a minimal fallback manager for cloud deployment."""
+    class FallbackManager:
+        def __init__(self, output_dir):
+            self.output_dir = output_dir
+            
+        def get_portfolio_allocation(self, risk_profile, selected_assets, risk_tolerance, **kwargs):
+            """Generate simple equal-weight allocation with risk adjustment."""
+            n_assets = len(selected_assets)
+            
+            if risk_profile == "Conservative":
+                # More balanced allocation
+                weights = np.ones(n_assets) / n_assets
+                # Add slight bias to first few assets (typically more stable)
+                if n_assets > 1:
+                    weights[0] *= 1.2
+                    weights[1:] *= 0.95
+                    weights = weights / weights.sum()
+                    
+            elif risk_profile == "Aggressive":
+                # More concentrated allocation
+                weights = np.random.dirichlet(np.ones(n_assets) * 0.5)
+                
+            else:  # Balanced
+                # Standard equal weight with small random variation
+                weights = np.ones(n_assets) / n_assets
+                weights += np.random.normal(0, 0.05, n_assets)
+                weights = np.abs(weights)  # Ensure positive
+                weights = weights / weights.sum()
+            
+            return weights
+    
+    return FallbackManager(config.OUTPUT_DIR)
 
 # Load managers
 cloud_manager, rl_manager = load_rl_managers()
@@ -94,8 +186,9 @@ if cloud_manager:
     if risk_results:
         actual_score = risk_results['risk_score']
         category = risk_results['risk_category']
+        environment = risk_results.get('environment', 'Unknown')
         timestamp = risk_results['timestamp'].strftime('%Y-%m-%d %H:%M')
-        st.success(f"✅ **AI Risk Assessment Applied**: {risk_from_profiler} | Score: {actual_score:.2f}/4.0 | Assessed: {timestamp}")
+        st.success(f"✅ **AI Risk Assessment Applied**: {risk_from_profiler} | Score: {actual_score:.2f}/4.0 | Environment: {environment} | Assessed: {timestamp}")
     elif risk_from_profiler and risk_score_from_profiler:
         st.success(f"✅ Using risk profile from assessment: **{risk_from_profiler}** (Score: {risk_score_from_profiler:.2f}/4.0)")
     elif risk_from_profiler:
@@ -306,26 +399,29 @@ if cloud_manager:
                     progress_bar.progress(60)
                     
                     try:
-                        agent, is_new = rl_manager.get_or_create_agent(
-                            risk_profile=risk_profile,
-                            selected_assets=selected_assets,
-                            market_data=market_data
-                        )
-                        
-                        status_text.text("📊 Generating RL-based allocation...")
-                        progress_bar.progress(80)
-                        
-                        weights = rl_manager.get_fallback_allocation(selected_assets, risk_tolerance)
-                        allocation_method = f"Reinforcement Learning ({'New' if is_new else 'Existing'} Agent)"
+                        if rl_manager:
+                            agent, is_new = rl_manager.get_or_create_agent(
+                                risk_profile=risk_profile,
+                                selected_assets=selected_assets,
+                                market_data=market_data
+                            )
+                            
+                            status_text.text("📊 Generating RL-based allocation...")
+                            progress_bar.progress(80)
+                            
+                            weights = rl_manager.get_fallback_allocation(selected_assets, risk_tolerance)
+                            allocation_method = f"Reinforcement Learning ({'New' if is_new else 'Existing'} Agent)"
+                        else:
+                            raise Exception("RL manager not available")
                         
                     except Exception as rl_error:
-                        st.warning(f"⚠️ RL failed: {str(rl_error)[:50]}... Using fallback")
+                        st.warning(f"⚠️ RL failed: {str(rl_error)[:50]}... Using cloud-optimized fallback")
                         weights = cloud_manager.get_portfolio_allocation(
                             risk_profile=risk_profile,
                             selected_assets=selected_assets,
                             risk_tolerance=risk_tolerance
                         )
-                        allocation_method = "MPT Fallback"
+                        allocation_method = "Cloud-Optimized MPT (Fallback)"
                 
                 # Step 4: Process results
                 status_text.text("📈 Processing optimization results...")
@@ -352,7 +448,8 @@ if cloud_manager:
                     'risk_tolerance': risk_tolerance,
                     'selected_assets': selected_assets,
                     'investment_amount': investment_amount,
-                    'market_data': market_data
+                    'market_data': market_data,
+                    'environment': 'Cloud' if is_cloud else 'Local'
                 }
                 
                 # Display results
@@ -362,9 +459,10 @@ if cloud_manager:
                 st.error(f"❌ Error generating portfolio: {str(e)}")
                 st.error("Please check your configuration and try again.")
                 
-                # Show error details for debugging
-                with st.expander("🐛 Error Details"):
-                    st.code(str(e))
+                # Show error details for debugging (only in local mode)
+                if not is_cloud:
+                    with st.expander("🐛 Error Details"):
+                        st.code(str(e))
     
     # Display Portfolio Results (persistent across button clicks)
     if st.session_state.portfolio_results is not None:
@@ -377,6 +475,7 @@ if cloud_manager:
         selected_assets = results['selected_assets']
         investment_amount = results['investment_amount']
         market_data = results['market_data']
+        environment = results.get('environment', 'Unknown')
         
         # Results section
         st.markdown("---")
@@ -402,6 +501,9 @@ if cloud_manager:
         with summary_col4:
             st.metric("Top Weight", f"{top_holding['Weight (%)']:.1f}%")
         
+        # Environment and method info
+        st.info(f"🤖 **Generated using**: {allocation_method} | **Environment**: {environment}")
+        
         # Allocation table
         st.subheader("📋 Portfolio Allocation")
         
@@ -418,31 +520,43 @@ if cloud_manager:
         viz_col1, viz_col2 = st.columns(2)
         
         with viz_col1:
-            import plotly.express as px
-            
-            # Pie chart
-            fig_pie = px.pie(
-                allocation_df,
-                values='Weight (%)',
-                names='Asset',
-                title='Portfolio Distribution',
-                color_discrete_sequence=px.colors.qualitative.Set3
-            )
-            fig_pie.update_traces(textposition='inside', textinfo='percent+label')
-            st.plotly_chart(fig_pie, use_container_width=True)
+            try:
+                import plotly.express as px
+                
+                # Pie chart
+                fig_pie = px.pie(
+                    allocation_df,
+                    values='Weight (%)',
+                    names='Asset',
+                    title='Portfolio Distribution',
+                    color_discrete_sequence=px.colors.qualitative.Set3
+                )
+                fig_pie.update_traces(textposition='inside', textinfo='percent+label')
+                st.plotly_chart(fig_pie, use_container_width=True)
+            except ImportError:
+                st.warning("⚠️ Plotly not available - charts disabled in this environment")
+            except Exception as chart_error:
+                st.warning(f"⚠️ Chart generation failed: {str(chart_error)[:50]}...")
         
         with viz_col2:
-            # Bar chart
-            fig_bar = px.bar(
-                allocation_df,
-                x='Asset',
-                y='Weight (%)',
-                title='Asset Weights',
-                color='Weight (%)',
-                color_continuous_scale='Blues'
-            )
-            fig_bar.update_layout(xaxis_tickangle=-45)
-            st.plotly_chart(fig_bar, use_container_width=True)
+            try:
+                import plotly.express as px
+                
+                # Bar chart
+                fig_bar = px.bar(
+                    allocation_df,
+                    x='Asset',
+                    y='Weight (%)',
+                    title='Asset Weights',
+                    color='Weight (%)',
+                    color_continuous_scale='Blues'
+                )
+                fig_bar.update_layout(xaxis_tickangle=-45)
+                st.plotly_chart(fig_bar, use_container_width=True)
+            except ImportError:
+                st.warning("⚠️ Plotly not available - charts disabled in this environment")
+            except Exception as chart_error:
+                st.warning(f"⚠️ Chart generation failed: {str(chart_error)[:50]}...")
         
         # Portfolio analytics
         st.subheader("📈 Portfolio Analytics")
@@ -463,59 +577,80 @@ if cloud_manager:
             # Expected risk level
             st.metric("Risk Level", f"{risk_tolerance * 100:.0f}/100")
         
-        # Market data preview
-        if not market_data.empty:
+        # Market data preview (cloud-safe)
+        if not market_data.empty and len(market_data) > 1:
             st.subheader("📊 Market Data Preview")
             
-            # Show recent price movements
-            recent_data = market_data.tail(30)  # Last 30 days
-            
-            if len(recent_data) > 1:
-                # Calculate daily returns
-                returns = recent_data.pct_change().dropna()
+            try:
+                # Show recent price movements
+                recent_data = market_data.tail(30)  # Last 30 days
                 
-                # Portfolio performance simulation
-                portfolio_returns = (returns * weights).sum(axis=1)
-                cumulative_returns = (1 + portfolio_returns).cumprod()
-                
-                # Plot portfolio performance
-                import plotly.graph_objects as go
-                
-                fig_perf = go.Figure()
-                fig_perf.add_trace(go.Scatter(
-                    x=cumulative_returns.index,
-                    y=cumulative_returns.values,
-                    mode='lines',
-                    name='Portfolio Performance',
-                    line=dict(color='blue', width=2)
-                ))
-                
-                fig_perf.update_layout(
-                    title='Simulated Portfolio Performance (Last 30 Days)',
-                    xaxis_title='Date',
-                    yaxis_title='Cumulative Return',
-                    hovermode='x'
-                )
-                
-                st.plotly_chart(fig_perf, use_container_width=True)
-                
-                # Performance metrics
-                perf_col1, perf_col2, perf_col3 = st.columns(3)
-                
-                with perf_col1:
-                    total_return = (cumulative_returns.iloc[-1] - 1) * 100
-                    st.metric("30-Day Return", f"{total_return:.2f}%")
+                if len(recent_data) > 1:
+                    # Calculate daily returns
+                    returns = recent_data.pct_change().dropna()
                     
-                with perf_col2:
-                    volatility = portfolio_returns.std() * np.sqrt(252) * 100  # Annualized
-                    st.metric("Annualized Volatility", f"{volatility:.2f}%")
-                    
-                with perf_col3:
-                    if volatility > 0:
-                        sharpe = (portfolio_returns.mean() * 252) / (portfolio_returns.std() * np.sqrt(252))
-                        st.metric("Sharpe Ratio", f"{sharpe:.2f}")
-                    else:
-                        st.metric("Sharpe Ratio", "N/A")
+                    if len(returns) > 0 and not returns.empty:
+                        # Portfolio performance simulation
+                        portfolio_returns = (returns * weights).sum(axis=1)
+                        
+                        if len(portfolio_returns) > 0:
+                            cumulative_returns = (1 + portfolio_returns).cumprod()
+                            
+                            # Plot portfolio performance
+                            try:
+                                import plotly.graph_objects as go
+                                
+                                fig_perf = go.Figure()
+                                fig_perf.add_trace(go.Scatter(
+                                    x=cumulative_returns.index,
+                                    y=cumulative_returns.values,
+                                    mode='lines',
+                                    name='Portfolio Performance',
+                                    line=dict(color='blue', width=2)
+                                ))
+                                
+                                fig_perf.update_layout(
+                                    title='Simulated Portfolio Performance (Last 30 Days)',
+                                    xaxis_title='Date',
+                                    yaxis_title='Cumulative Return',
+                                    hovermode='x'
+                                )
+                                
+                                st.plotly_chart(fig_perf, use_container_width=True)
+                                
+                                # Performance metrics
+                                perf_col1, perf_col2, perf_col3 = st.columns(3)
+                                
+                                with perf_col1:
+                                    if len(cumulative_returns) > 0:
+                                        total_return = (cumulative_returns.iloc[-1] - 1) * 100
+                                        st.metric("30-Day Return", f"{total_return:.2f}%")
+                                    else:
+                                        st.metric("30-Day Return", "N/A")
+                                        
+                                with perf_col2:
+                                    if len(portfolio_returns) > 0:
+                                        volatility = portfolio_returns.std() * np.sqrt(252) * 100  # Annualized
+                                        st.metric("Annualized Volatility", f"{volatility:.2f}%")
+                                    else:
+                                        st.metric("Annualized Volatility", "N/A")
+                                        
+                                with perf_col3:
+                                    if len(portfolio_returns) > 0 and portfolio_returns.std() > 0:
+                                        sharpe = (portfolio_returns.mean() * 252) / (portfolio_returns.std() * np.sqrt(252))
+                                        st.metric("Sharpe Ratio", f"{sharpe:.2f}")
+                                    else:
+                                        st.metric("Sharpe Ratio", "N/A")
+                                        
+                            except ImportError:
+                                st.info("📊 Performance chart not available in this environment")
+                            except Exception as perf_error:
+                                st.warning(f"⚠️ Performance analysis failed: {str(perf_error)[:50]}...")
+                        
+            except Exception as data_error:
+                st.warning(f"⚠️ Market data analysis failed: {str(data_error)[:50]}...")
+                if is_cloud:
+                    st.info("🌩️ This is normal in cloud mode with limited data access")
         
         # Export functionality
         st.subheader("💾 Export Portfolio")
@@ -527,7 +662,7 @@ if cloud_manager:
             st.download_button(
                 label="📥 Download as CSV",
                 data=csv_data,
-                file_name=f"portfolio_{risk_profile}_{len(selected_assets)}assets.csv",
+                file_name=f"portfolio_{risk_profile}_{len(selected_assets)}assets_{environment}.csv",
                 mime="text/csv"
             )
         
@@ -538,6 +673,8 @@ Risk Profile: {risk_profile}
 Total Assets: {len(selected_assets)}
 Investment Amount: ${investment_amount:,}
 Allocation Method: {allocation_method}
+Environment: {environment}
+Generated: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 Asset Allocation:
 {allocation_df.to_string(index=False)}"""
@@ -545,21 +682,25 @@ Asset Allocation:
             st.download_button(
                 label="📄 Download Summary",
                 data=summary_text,
-                file_name=f"portfolio_summary_{risk_profile}.txt",
+                file_name=f"portfolio_summary_{risk_profile}_{environment}.txt",
                 mime="text/plain"
             )
         
         # Technical details
         with st.expander("🔧 Technical Details"):
-            st.json({
+            technical_info = {
                 "allocation_method": allocation_method,
                 "risk_profile": risk_profile,
                 "risk_tolerance": risk_tolerance,
                 "total_assets": len(selected_assets),
-                "environment": "Cloud" if is_cloud else "Local",
+                "environment": environment,
                 "selected_assets": selected_assets,
-                "investment_amount": investment_amount
-            })
+                "investment_amount": investment_amount,
+                "rl_manager_available": rl_manager is not None,
+                "tabpfn_available": TABPFN_AVAILABLE,
+                "cloud_detected": is_cloud
+            }
+            st.json(technical_info)
     
     # Tips and guidance
     st.markdown("---")
@@ -584,11 +725,45 @@ Asset Allocation:
         - Monitor market conditions
         - Review and adjust periodically
         """)
+    
+    # Cloud-specific tips
+    if is_cloud:
+        st.info("""
+        🌩️ **Cloud Mode Notes:**
+        - Optimized for fast performance on Streamlit Cloud
+        - Uses memory-efficient algorithms
+        - May use synthetic data when live data unavailable
+        - Charts may be limited based on available packages
+        """)
 
 else:
-    st.error("❌ Could not load portfolio optimization system.")
-    st.error("Please ensure all dependencies are installed and models are trained.")
+    # Manager loading failed
+    if is_cloud:
+        st.warning("⚠️ Portfolio optimization system not fully available in cloud environment")
+        st.info("""
+        ### 🌩️ **Cloud Deployment Limitations**
+        
+        Some advanced features may not be available:
+        - Full RL training requires local environment
+        - Large model files may not be included in deployment
+        - Limited memory for complex computations
+        
+        **Alternative**: Use the simplified portfolio allocation that works with heuristic methods.
+        """)
+    else:
+        st.error("❌ Could not load portfolio optimization system.")
+        st.error("Please ensure all dependencies are installed and models are trained.")
+        
+        # Troubleshooting for local
+        with st.expander("🔧 Troubleshooting"):
+            st.markdown("""
+            **To fix this issue:**
+            1. Install all dependencies: `pip install -r requirements.txt`
+            2. Run data processing: `python scripts/run_data_processing.py`
+            3. Train models: `python scripts/run_risk_model_training.py`
+            4. Refresh this page
+            """)
 
 # Footer
 st.markdown("---")
-st.caption("Portfolio recommendations are for educational purposes only and should not be considered as financial advice.")
+st.caption(f"Portfolio recommendations are for educational purposes only and should not be considered as financial advice. | Environment: {'Cloud' if is_cloud else 'Local'}")
