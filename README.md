@@ -758,12 +758,6 @@ print(f'Risk Model: {Path(\"data/output/risk_tolerance_model.pkl\").exists()}')
 "
 ```
 
-### 📞 Getting Help
-- **GitHub Issues**: Bug reports with environment context (local/cloud)
-- **Discussions**: Q&A and community support
-- **Documentation**: Comprehensive inline comments with environment-specific examples
-- **Cloud Support**: Specific section for Streamlit Cloud deployment questions
-
 ---
 
 ## 🎉 Acknowledgments
@@ -796,7 +790,7 @@ print(f'Risk Model: {Path(\"data/output/risk_tolerance_model.pkl\").exists()}')
 
 **🌐 Production-Ready • 🏠 Local Development • ☁️ Cloud Optimized**
 
-[🚀 Live Demo](https://your-streamlit-app.streamlit.app) | 📚 Documentation | 💡 Research Paper
+[🚀 Live Demo](https://adredes-weslee-using-artificial-intelligenc-dashboardapp-juewyb.streamlit.app/) 
 
 *Transforming Financial AI Research into Production-Ready Solutions*
 
