@@ -4,6 +4,24 @@ Build a Streamlit robo-advisor that trains a risk model from SCF data and uses S
 
 It supports both full local training and cloud-aware fallback modes in the same UI.
 
+<!-- README_SURFACE_START -->
+![Python](https://img.shields.io/badge/Python-Robo_Advisor-3776AB?style=flat-square&logo=python&logoColor=white) ![Streamlit](https://img.shields.io/badge/Streamlit-App-FF4B4B?style=flat-square&logo=streamlit&logoColor=white) ![RL](https://img.shields.io/badge/Reinforcement_Learning-Portfolio_Allocation-7C3AED?style=flat-square)
+
+[![Portfolio Article](https://img.shields.io/badge/Portfolio%20Article-102A43?style=flat-square)](https://adredes-weslee.github.io/ai/finance/foundation-models/reinforcement-learning/2025/06/24/robo-advisor-risk-profiling-portfolio-optimization.html) [![Live Demo](https://img.shields.io/badge/Live%20Demo-FF8B2B?style=flat-square)](https://adredes-weslee-using-artificial-intelligenc-dashboardapp-juewyb.streamlit.app/)
+![Repository preview](data/output/evaluation_balanced.png)
+
+## Quickstart
+
+```bash
+conda env create -f environment.yaml
+python scripts/run_data_processing.py
+python scripts/run_dashboard.py
+```
+
+See [Setup and Run](#setup-and-run) for the full environment and verification path.
+
+<!-- README_SURFACE_END -->
+
 ## Why This Repository Exists
 
 - Turn survey-style inputs into a risk score and recommendation.
