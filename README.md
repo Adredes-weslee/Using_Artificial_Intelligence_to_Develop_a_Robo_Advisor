@@ -22,6 +22,12 @@ See [Setup and Run](#setup-and-run) for the full environment and verification pa
 
 <!-- README_SURFACE_END -->
 
+## Interface Preview
+
+![Robo-advisor dashboard overview](docs/screenshots/app-overview.png)
+
+The local demo now opens even without the full PyTorch training stack. When those heavier RL dependencies are unavailable, the dashboard falls back to the cloud-compatible allocation path so the Streamlit surface, saved models, and portfolio workflow can still be reviewed locally.
+
 ## Why This Repository Exists
 
 - Turn survey-style inputs into a risk score and recommendation.

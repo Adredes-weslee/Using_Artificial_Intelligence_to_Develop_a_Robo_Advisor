@@ -7,35 +7,48 @@ import os
 import socket
 from pathlib import Path
 
+st.set_page_config(
+    page_title="AI Robo-Advisor",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
 try:
     from tabpfn import TabPFNRegressor
     TABPFN_AVAILABLE = True
 except ImportError:
     TABPFN_AVAILABLE = False
-    
+
 # Setup
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
+import src.config as config
+from src.models.cloud_optimized_agent import CloudOptimizedRLManager
+
+RL_MANAGER_AVAILABLE = True
+RL_IMPORT_ERROR = None
 try:
-    import src.config as config
-    from src.models.cloud_optimized_agent import CloudOptimizedRLManager
     from src.models.rl_agent_manager import RLAgentManager
+except ImportError as exc:
+    RL_MANAGER_AVAILABLE = False
+    RL_IMPORT_ERROR = exc
+
+try:
     from src.utils.market_analysis import detect_market_regime, get_regime_recommendations
-except ImportError as e:
-    st.error(f"Import error: {e}")
-    st.error("Please ensure all required dependencies are installed and data processing is complete.")
-    st.stop()
+except ImportError:
+    def detect_market_regime(_price_data, lookback_days: int = 252) -> str:
+        return "Moderate Volatility / Stable"
 
-st.set_page_config(
-    page_title="AI Robo-Advisor",
-    page_icon="🤖",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+    def get_regime_recommendations(_regime: str) -> dict:
+        return {
+            "message": "Balanced strategies remain the safest default.",
+            "style": "info",
+            "advice": "Use the cloud-compatible allocator when the full RL stack is unavailable.",
+        }
 
-st.title("🤖 AI-Powered Robo-Advisor")
-st.markdown("### Intelligent Portfolio Optimization with Reinforcement Learning")
+st.title("AI-Powered Robo-Advisor")
+st.markdown("### Risk profiling and portfolio allocation in one Streamlit workspace")
 
 # IMPROVED CLOUD DETECTION
 def detect_cloud_environment():
@@ -60,15 +73,19 @@ def detect_cloud_environment():
 is_cloud = detect_cloud_environment()
 
 if is_cloud:
-    st.info("🌩️ **Cloud Mode**: Using memory-optimized MPT allocation")
-    st.caption("Running on Streamlit Community Cloud with memory-optimized AI")
+    st.info("**Cloud Mode**: using the memory-optimized allocator and lightweight heuristics.")
+    st.caption("Running on Streamlit Community Cloud with the cloud-compatible portfolio engine.")
+elif RL_MANAGER_AVAILABLE:
+    st.info("**Local Mode**: full risk-model and reinforcement-learning paths are available.")
+    st.caption("Running locally with the full training and evaluation stack.")
 else:
-    st.info("🖥️ **Local Mode**: Full RL training capabilities available")
-    st.caption("Running locally with complete reinforcement learning training")
+    st.info("**Local Mode**: the Streamlit UI is available, but PyTorch-backed RL training is not installed.")
+    st.caption("The app will fall back to the cloud-compatible allocator until the full RL stack is installed.")
+    st.warning("PyTorch-backed RL training is unavailable in this environment, so the app is using the cloud-compatible allocator.")
 
 # Sidebar
-st.sidebar.header("Portfolio Configuration")
-st.sidebar.markdown("Configure your investment preferences below:")
+st.sidebar.header("Portfolio Setup")
+st.sidebar.markdown("Set your risk profile, objective mix, and asset universe.")
 
 # Risk Profile Selection
 risk_profile = st.sidebar.selectbox(
@@ -91,25 +108,24 @@ st.sidebar.header("🎯 Investment Objective")
 risk_preference = st.sidebar.radio(
     "What's your primary goal?",
     [
-        "🛡️ Protect My Capital (Risk-Focused)",
-        "⚖️ Balance Risk & Return (Academic)",  
-        "🚀 Maximize Returns (Growth-Focused)",
-        "🎲 Custom Mix"
+        "Protect capital",
+        "Balance risk and return",
+        "Maximize returns",
+        "Custom mix",
     ]
 )
 
-if risk_preference == "🎲 Custom Mix":
+if risk_preference == "Custom mix":
     return_weight = st.sidebar.slider(
         "Return Priority", 0.0, 1.0, 0.5, 0.1,
         help="Higher = Focus on returns, Lower = Focus on risk management"
     )
     risk_weight = 1.0 - return_weight
 else:
-    # Predefined mixes
     weights = {
-        "🛡️ Protect My Capital (Risk-Focused)": (0.2, 0.8),      # 20% return, 80% risk
-        "⚖️ Balance Risk & Return (Academic)": (0.5, 0.5),        # 50% return, 50% risk  
-        "🚀 Maximize Returns (Growth-Focused)": (0.8, 0.2)        # 80% return, 20% risk
+        "Protect capital": (0.2, 0.8),
+        "Balance risk and return": (0.5, 0.5),
+        "Maximize returns": (0.8, 0.2),
     }
     return_weight, risk_weight = weights[risk_preference]
 
